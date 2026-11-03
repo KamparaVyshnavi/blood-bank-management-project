@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import { PulseMap } from "../../src/components/pulse-map";
-import { InventoryLab } from "../../src/components/inventory-lab";
-import { MatchLab } from "../../src/components/match-lab";
-import { CodeRed } from "../../src/components/code-red";
-import { WasteLab } from "../../src/components/waste-lab";
+import { PulseMap } from "../../src/components/labs/pulse-map";
+import { InventoryLab } from "../../src/components/labs/inventory-lab";
+import { MatchLab } from "../../src/components/labs/match-lab";
+import { CodeRed } from "../../src/components/labs/code-red";
+import { WasteLab } from "../../src/components/labs/waste-lab";
 import "../../src/app/globals.css";
 
 const scenes = { "Pulse Map": PulseMap, Inventory: InventoryLab, "Match Lab": MatchLab, "Code Red": CodeRed, "Blood Weather": WasteLab };
