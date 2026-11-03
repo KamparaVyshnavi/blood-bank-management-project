@@ -34,7 +34,7 @@ const nav = [
       { href: "/camp-planner", label: "Camp Planner", icon: "+" },
       { href: "/cold-room", label: "Cold Chain", icon: "*" },
       { href: "/intelligence", label: "Intelligence", icon: "i" },
-      { href: "/duel", label: "Reservation Duel", icon: "⇄" },
+      { href: "/duel", label: "Concurrency Lab", icon: "⇄" },
     ],
   },
 ];
@@ -57,7 +57,7 @@ const PAGE_TITLES: Record<string, string> = {
   "/cold-room": "Cold Chain",
   "/intelligence": "Intelligence",
   "/system": "System",
-  "/duel": "Reservation Duel",
+  "/duel": "Concurrency Lab",
   "/try": "Getting Started",
 };
 

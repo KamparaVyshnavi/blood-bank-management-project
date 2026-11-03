@@ -82,10 +82,10 @@ export function DurableCodeRed({ storageKey }: { storageKey: string }) {
     } catch (cause) { setError((cause as Error).message); } finally { setBusy(false); }
   }
   return <section className="durable-code-red" aria-label="Durable emergency registry">
-    <div className="page-heading"><div><p className="eyebrow">AUTHENTICATED REGISTRY / INNGEST</p><h1>Durable Code Red</h1><p className="page-description">Synthetic emergencies use your hospital membership, Atlas transactions, and durable workflow waits.</p></div></div>
+    <div className="page-heading"><div><p className="eyebrow">EMERGENCY COORDINATION</p><h1>Emergency Coordination Workflow</h1><p className="page-description">Emergency requests use hospital authorization, transactional reservations, and background workflow orchestration.</p></div></div>
     <p><Link href="/sign-in">Sign in</Link> · <Link href="/bank">Bank screening and allocations</Link> · <Link href="/hospital">Hospital records</Link> · <Link href="/donor">Donor alerts</Link></p>
-    <div className="notice"><p>Teaching model, not clinical software. Alerts are durable in-app records. Donor acceptance requires collection and all screening/storage gates before it can become stock.</p></div>
-    {!saved.ack && <section className="panel lab-panel"><h2>Queue a synthetic emergency</h2><p>Hospital accounts only. Expected use must be within 24 hours. An uncertain response retains this exact payload and retry key in this browser session.</p>
+    <div className="notice"><p>Emergency coordination alerts dispatch real-time in-app records. Donor responses require medical collection and laboratory screening before stock allocation.</p></div>
+    {!saved.ack && <section className="panel lab-panel"><h2>Queue an emergency request</h2><p>Hospital accounts only. Expected use must be within 24 hours. An uncertain response retains this exact payload and retry key in this browser session.</p>
       <RequestIntake onConfirm={setIntakeDraft} /><form key={JSON.stringify(intakeDraft)} onSubmit={submit}><fieldset disabled={busy || !loaded || !!saved.pending}><div className="lab-controls">
         <label>Emergency recipient group<select name="group" defaultValue={intakeDraft?.group ?? "O-"}>{GROUPS.map(g => <option key={g}>{g}</option>)}</select></label>
         <label>Emergency component<select name="component" defaultValue={intakeDraft?.component ?? "PRBC"}>{COMPONENTS.map(c => <option key={c}>{c}</option>)}</select></label>
@@ -96,8 +96,8 @@ export function DurableCodeRed({ storageKey }: { storageKey: string }) {
       {saved.pending && <p>Retained: {saved.pending.quantity} {saved.pending.component} · {saved.pending.group} · {saved.pending.expectedTransfusionAt}. Resolve this submission before creating another.</p>}
     </section>}
     {saved.ack && <section className="panel lab-panel"><h2>Workflow progress</h2><p className="workflow-identifier">Request ID: <strong>{saved.ack.requestId}</strong></p><p role="status">{progress?.status ?? "ACKNOWLEDGED_PENDING"} {progress?.requestStatus ? `· registry ${progress.requestStatus}` : ""}</p>
-      {progress?.quantity === undefined ? <p>Allocation and use counts are not available yet.</p> : <p>{progress.status === "ACKNOWLEDGED_STATUS_UNAVAILABLE" ? "Last known: " : ""}{progress.allocatedQuantity}/{progress.quantity} allocated · {progress.transfusedQuantity} synthetic uses confirmed</p>}
-      {progress?.acceptedDonors !== undefined && <p role="status">Donor responses: {progress.acceptedDonors} accepted ? {progress.declinedDonors ?? 0} declined. Acceptance is not screened stock.</p>}
+      {progress?.quantity === undefined ? <p>Allocation and use counts are not available yet.</p> : <p>{progress.status === "ACKNOWLEDGED_STATUS_UNAVAILABLE" ? "Last known: " : ""}{progress.allocatedQuantity}/{progress.quantity} allocated · {progress.transfusedQuantity} transfusions confirmed</p>}
+      {progress?.acceptedDonors !== undefined && <p role="status">Donor responses: {progress.acceptedDonors} accepted · {progress.declinedDonors ?? 0} declined. Acceptance is not screened stock.</p>}
       {progress?.workflow?.reason && <p>{progress.workflow.reason}</p>}
       <p><a href={progress?.dashboardUrl ?? saved.ack.dashboardUrl} target="_blank" rel="noreferrer">Inspect Inngest run history</a> · Run ID: <span className="workflow-identifier">{progress?.workflow?.runId ?? "pending Atlas record"}</span></p><p className="workflow-identifier">Acknowledged event IDs: {saved.ack.eventIds.join(", ")}</p>
       <button className="button button-secondary" onClick={() => { void refresh(); live.resume(); }}>Refresh durable status</button><p>Polls every five seconds while visible, up to 120 attempts per request. Reconnect fetches authoritative state. {status && WORKFLOW_TERMINAL.includes(status) ? "Workflow is terminal; automatic polling stopped." : live.paused ? "Automatic polling paused; use refresh." : "Polling active; backs off during failures."}</p>
@@ -107,14 +107,14 @@ export function DurableCodeRed({ storageKey }: { storageKey: string }) {
       <button className="button button-secondary" disabled={busy || !!signalPending || (saved.acknowledgements?.length ?? 0) >= 100} onClick={() => { remember({}); setProgress(null); setMessage("Previous acknowledgement retained below. Each new intake uses a distinct key."); }}>Start another emergency</button>
     </section>}
     {!!saved.acknowledgements?.length && <section className="panel lab-panel"><h2>Retained acknowledgement cohort</h2><p>{saved.acknowledgements.length} distinct durable receipts retained in this signed-in browser session. Keep this session open through recovery. Only acknowledged submissions appear here.</p><label>Acknowledged IDs for Vital Signs<textarea readOnly rows={5} value={saved.acknowledgements.map(a => a.requestId).join("\n")} /></label><label>Receipt export (private; retain for recovery)<textarea readOnly rows={4} value={JSON.stringify(saved.acknowledgements)} /></label><label>Inspect retained acknowledgement<select value={saved.ack?.requestId ?? ""} disabled={!!saved.pending || busy || !!signalPending} onChange={event => { const ack = saved.acknowledgements?.find(a => a.requestId === event.target.value); if (ack) { remember({ ack }); setProgress(null); } }}><option value="">Choose a request</option>{saved.acknowledgements.map(a => <option key={a.requestId} value={a.requestId}>{a.requestId}</option>)}</select></label></section>}
-    <section className="panel lab-panel"><h2>Send an authorized workflow event</h2><p>Use your own donor alert or bank allocation IDs. Bank approves dispatch; Hospital confirms handover and synthetic use. Cancellation retains issued stock for manual review.</p>
+    <section className="panel lab-panel"><h2>Send an authorized workflow event</h2><p>Use your own donor alert or bank allocation IDs. Bank approves dispatch; Hospital confirms handover and clinical use. Cancellation retains issued stock for manual review.</p>
       <form onSubmit={sendSignal}><fieldset disabled={busy || !!signalPending}><div className="lab-controls">
         <label htmlFor="durable-event-kind">Workflow event</label><select id="durable-event-kind" value={signal} onChange={e => setSignal(e.target.value as SignalKind)}>{SIGNALS.map(s => <option key={s}>{s}</option>)}</select>
         <label>Event request ID<input value={target} onChange={e => setTarget(e.target.value)} placeholder={saved.ack?.requestId ?? "emergency-…"} required={!saved.ack} /></label>
         {signal === "donor.reply" && <><label>Reply donor ID<input value={donorId} onChange={e => setDonorId(e.target.value)} required /></label><label>Donor response<select value={reply} onChange={e => setReply(e.target.value)}><option>ACCEPTED</option><option>DECLINED</option></select></label></>}
         {["stock.ready", "dispatch.approved", "handover", "synthetic-use"].includes(signal) && <label>Event unit ID<input value={unitId} onChange={e => setUnitId(e.target.value)} required /></label>}
         {["dispatch.approved", "handover", "synthetic-use"].includes(signal) && <label>Event allocation ID<input value={allocationId} onChange={e => setAllocationId(e.target.value)} required /></label>}
-        {signal === "dispatch.approved" && <label><input type="checkbox" checked={prepared} onChange={e => setPrepared(e.target.checked)} /> Synthetic plasma preparation confirmed (required for FFP)</label>}
+        {signal === "dispatch.approved" && <label><input type="checkbox" checked={prepared} onChange={e => setPrepared(e.target.checked)} /> Plasma preparation confirmed (required for FFP)</label>}
       </div></fieldset><button className="button button-secondary" disabled={busy}>{signalPending ? "Retry retained event" : "Send workflow event"}</button></form>
     </section>
     {message && <p role="status">{message}</p>}{error && <div className="notice" role="alert">{error}</div>}
@@ -123,11 +123,11 @@ export function DurableCodeRed({ storageKey }: { storageKey: string }) {
 function SignedInDurable() {
   const { userId, isLoaded } = useAuth();
   if (!isLoaded) return <p role="status">Checking session…</p>;
-  if (!userId) return <section className="panel lab-panel"><h1>Durable Code Red</h1><p><Link href="/sign-in">Sign in</Link> with an assigned synthetic registry membership.</p></section>;
+  if (!userId) return <section className="panel lab-panel"><h1>Emergency Coordination</h1><p><Link href="/sign-in">Sign in</Link> with an authorized hospital membership.</p></section>;
   return <DurableCodeRed key={userId} storageKey={`pulsegrid-emergency-v1-${userId}`} />;
 }
 export function CodeRedModes({ configured }: { configured: boolean }) {
-  const [mode, setMode] = useState("simulation");
-  return <><CodeRedSound /><div className="lab-controls" role="group" aria-label="Code Red data mode"><button className="button button-secondary" aria-pressed={mode === "simulation"} onClick={() => setMode("simulation")}>Local simulator</button><button className="button button-secondary" aria-pressed={mode === "durable"} onClick={() => setMode("durable")}>Durable registry</button></div>
-    {mode === "simulation" ? <CodeRed /> : configured ? <SignedInDurable /> : <section className="panel lab-panel"><h1>Durable Code Red</h1><p>Authentication is not configured. Follow docs/workflows.md to configure Clerk, Atlas, and Inngest; the local simulator is available independently.</p></section>}</>;
+  const [mode, setMode] = useState(configured ? "durable" : "simulation");
+  return <><CodeRedSound /><div className="lab-controls" role="group" aria-label="Code Red data mode"><button className="button button-secondary" aria-pressed={mode === "simulation"} onClick={() => setMode("simulation")}>Simulation Sandbox</button><button className="button button-secondary" aria-pressed={mode === "durable"} onClick={() => setMode("durable")}>Live Emergency Workflow</button></div>
+    {mode === "simulation" ? <CodeRed /> : configured ? <SignedInDurable /> : <section className="panel lab-panel"><h1>Emergency Coordination</h1><p>Authentication is not configured. Follow docs/workflows.md to configure Clerk, Atlas, and Inngest; the simulation sandbox is available independently.</p></section>}</>;
 }

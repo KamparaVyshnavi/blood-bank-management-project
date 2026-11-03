@@ -1,25 +1,46 @@
 import Link from "next/link";
 
-export const metadata = { title: "Things worth trying" };
+export const metadata = { title: "Operational Scenarios" };
 
 const scenes = [
-  { href: "/inventory", title: "Explain a safe match", steps: "Keep A+ PRBC, quantity 2 and use in 2 hours. DEMO-002 precedes DEMO-001. Inspect why expired and unscreened stock is excluded. Reserve, cancel, reserve again, then issue.", reset: "Reset fixture restores this page's synthetic units." },
-  { href: "/match-lab", title: "Reverse the plasma rule", steps: "Select A+ to O− in PRBC: rejected. Switch to FFP and inspect the explanation. Platelets use a deliberately simplified identical-group rule. Enable the isolated Bombay example to discuss the eight-group model's limits.", reset: "Reload restores the initial selection." },
-  { href: "/", title: "Replay the Pulse Map", steps: "Use seed monsoon, Development and Near-expiry inventory. Load scenario, advance one day, then inspect the labelled expiry and activity metrics. Map markers work with Enter and Space.", reset: "Pause, choose Monsoon baseline and Load scenario. Reset rebuilds the loaded fixture; configuration persists, progress does not." },
-  { href: "/code-red", title: "Finish a synthetic emergency", steps: "Choose Stock available. Start simulated Code Red, dispatch reserved stock, advance 60 minutes, confirm handover, then confirm synthetic use. Try Stock shortage separately and advance three minutes three times to expose unresolved donor waves.", reset: "Reset journey. Donor acceptance alone never creates screened stock." },
-  { href: "/duel", title: "Race for the last unit", steps: "Run the atomic browser teaching model and inspect one owner and zero double allocations. Compare the naive model. Actual transaction safety is evidenced separately by replica-set integration tests.", reset: "Reset duel restores the isolated browser fixture." },
-  { href: "/unit-passport", title: "Find a changed record", steps: "Keep Isolated local tamper fixture. Verify, then Alter event 3: the first affected record is 3. Reset and verify again. Local SHA-256 verification is separate from server HMAC verification.", reset: "Reset fixture. This exercise never edits the registry." },
-  { href: "/waste-lab", title: "Compare the same synthetic month", steps: "Run matched month with default assumptions. Inspect expiry counts and denominators, fully issued requests and transfer distance. Download the JSON. A lower percentage with added camp supply is not proof of fewer expired units.", reset: "Cancel a running comparison, or reload for defaults. All policies use matched demand." },
-  { href: "/cold-room", title: "Quarantine synthetic stock", steps: "Select a PRBC synthetic fault and advance the feed one minute. Inspect DEMO-003. Recover the feed: quarantine remains until review. The optional 3D view has an equivalent HTML inventory.", reset: "Reset local fixture. No real sensor is connected." },
-  { href: "/camp-planner", title: "Inspect a camp proposal", steps: "Inspect ranked synthetic sites, eligible donors and expected turnout. Set weekly invitations to zero and compare. Expected attendance is an estimate, not collected or screened blood.", reset: "Reload for defaults." },
-  { href: "/intelligence", title: "Review a multilingual draft", steps: "Use the labelled offline dictionary with A+ PRBC 2 units urgent in 2 hours. Edit a field and observe that confirmation is invalidated. Confirming a draft does not submit an emergency. Live AI requires separate authorized configuration.", reset: "Reload clears the draft. The read-only ops examples expose aggregates only." }
+  { href: "/inventory", title: "Explain a safe match", steps: "Keep A+ PRBC, quantity 2 and use in 2 hours. Inspect why expired and unscreened stock is excluded. Reserve, cancel, reserve again, then issue.", reset: "Reset fixture restores this page's sample units." },
+  { href: "/match-lab", title: "Reverse the plasma rule", steps: "Select A+ to O− in PRBC: rejected. Switch to FFP and inspect the explanation. Platelets use an identical-group rule. Enable the isolated Bombay example to discuss eight-group boundaries.", reset: "Reload restores the initial selection." },
+  { href: "/code-red", title: "Emergency coordination workflow", steps: "Simulate emergency request intake, dispatch reserved stock, advance simulated time, confirm handover, and verify transfusion record.", reset: "Reset journey." },
+  { href: "/duel", title: "Concurrency and atomic claims", steps: "Inspect single ownership and zero double allocations under concurrent hospital demand.", reset: "Reset restores the isolated browser fixture." },
+  { href: "/unit-passport", title: "Cryptographic provenance", steps: "Verify SHA-256 evidence chain and tamper detection across lifecycle milestones.", reset: "Reset fixture." },
+  { href: "/waste-lab", title: "Policy evaluation and forecasting", steps: "Run 30-day policy comparison with rebalancing and inventory projections.", reset: "Cancel running comparison, or reload for defaults." },
+  { href: "/cold-room", title: "Cold-chain telemetry and quarantine", steps: "Inspect component storage temperatures, simulate sensor breach, and verify automatic quarantine.", reset: "Reset local fixture." },
+  { href: "/camp-planner", title: "Donation camp turnout planning", steps: "Inspect regional turnout scoring, eligible donor clusters, and radius configuration.", reset: "Reload for defaults." },
+  { href: "/intelligence", title: "Multilingual emergency intake", steps: "Test natural language emergency text parsing across English, Hindi, and Hinglish.", reset: "Reload clears the draft." }
 ];
 
 export default function TryPage() {
-  return <><div className="page-heading"><div><p className="eyebrow">EXPLORE / REHEARSE</p><h1>Things worth trying</h1><p className="page-description">Short, repeatable exercises with synthetic data. Teaching model, not clinical software.</p></div></div>
-    <section className="panel lab-panel"><h2>Start with a local exercise</h2><p>The exercises below run in the browser and keep simulation separate from the private registry. Times are simulated unless a screen explicitly says otherwise. Reloading a scene clears its transient state.</p><p>Use the opt-in Demo Director for scene navigation. Keyboard users can use Skip to content, Tab, Enter and Space. Status text accompanies color; reduced-motion preferences are respected.</p></section>
-    <div className="extras-grid">{scenes.map(scene => <section className="panel lab-panel" key={scene.href}><h2><Link href={scene.href}>{scene.title}</Link></h2><p>{scene.steps}</p><p className="source-note"><strong>Reset: </strong>{scene.reset}</p></section>)}</div>
-    <section className="panel lab-panel"><h2>Join the synthetic donor exercise</h2><p>Use a presenter-provided HTTPS deployment and the QR shown in the <Link href="/donor">Donor portal</Link>. Sign in with an assigned synthetic identity; a new account has no membership automatically. Choose a nickname only and never enter patient information, real medical history or a real donor profile.</p><p>Keep one hospital, one bank and the phone in separate sessions. The presenter creates a shortage and opens the alert. Accept or decline once. A pending offline response is a queued attempt; it counts only after the server acknowledges it. Reconnect and verify one response using the original key. Push is optional; reload and polling are the fallback.</p><p>Audience participation requires a configured deployment and an actual device rehearsal. If these are unavailable, use the local Code Red donor waves and describe them as simulation. The standalone offline sandbox covers the map, inventory, matching, Code Red and Blood Weather; it does not provide a live donor service.</p></section>
-    <section className="panel lab-panel"><h2>Check the public and private boundary</h2><p><Link href="/public-board">Public Board</Link> exposes district, group and component availability bands. <Link href="/bank">Bank</Link>, <Link href="/hospital">Hospital</Link> and <Link href="/registry">State registry</Link> require authorized membership. Unavailable services show a failure state rather than invented empty stock. <Link href="/vital-signs">Vital Signs</Link> requires state-admin access for actual measurements and opt-in demo faults.</p></section>
-  </>;
+  return (
+    <>
+      <div className="page-heading">
+        <div>
+          <p className="eyebrow">EXPLORE / WORKFLOWS</p>
+          <h1>Operational Scenarios</h1>
+          <p className="page-description">Interactive workflow sandboxes and policy demonstration scenarios.</p>
+        </div>
+      </div>
+      <section className="panel lab-panel">
+        <h2>Interactive Workflows</h2>
+        <p>The scenarios below run in the browser to model core blood bank and emergency coordination capabilities.</p>
+      </section>
+      <div className="extras-grid">
+        {scenes.map(scene => (
+          <section className="panel lab-panel" key={scene.href}>
+            <h2><Link href={scene.href}>{scene.title}</Link></h2>
+            <p>{scene.steps}</p>
+            <p className="source-note"><strong>Reset: </strong>{scene.reset}</p>
+          </section>
+        ))}
+      </div>
+      <section className="panel lab-panel">
+        <h2>Public &amp; Authenticated Interfaces</h2>
+        <p><Link href="/public-board">Public Board</Link> exposes privacy-preserving availability bands. <Link href="/bank">Blood Banks</Link>, <Link href="/hospital">Hospitals</Link>, and <Link href="/registry">Reports &amp; Analytics</Link> enforce authenticated role-based access.</p>
+      </section>
+    </>
+  );
 }

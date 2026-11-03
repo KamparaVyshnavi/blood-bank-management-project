@@ -1,3 +1,7 @@
 import { Duel } from "@/components/duel";
-export const metadata = { title: "The Duel" };
-export default function Page() { return <Duel />; }
+
+export const metadata = { title: "Concurrency Lab" };
+
+export default function Page() {
+  return <Duel />;
+}

@@ -70,14 +70,14 @@ function Portal({ role, configured }: { role: Role; configured: boolean }) {
   const live = useLiveRefresh(refresh, !!member, `${parent}/${resource}/${revision}`);
   useEffect(() => () => { refreshVersion.current++; }, [parent, resource]);
   const choices = role === "BANK" ? ["units", "stock", "unitEvents", "allocations"] : role === "HOSPITAL" ? ["requests", "allocations"] : role === "DONOR" ? ["alerts"] : ["banks", "hospitals", "units", "unitEvents", "requests", "allocations", "donors", "stock", "alerts"];
-  return <><div className="page-heading"><div><p className="eyebrow">ATLAS REGISTRY / STAGE 6</p><h1>{title}</h1><p className="page-description">Synthetic registry data. Access follows your server-assigned membership.</p></div>{configured && <UserButton />}</div>
+  return <><div className="page-heading"><div><h1>{title}</h1><p className="page-description">Access follows your server-assigned role and institution.</p></div>{configured && <UserButton />}</div>
     {!configured ? <section className="panel feature-panel registry-panel"><h2>{role === "BANK" ? "Bank access is not configured" : "Registry access is not configured"}</h2><p>Configure Clerk and Atlas using the registry setup guide. Private APIs fail closed while services are unavailable.</p></section> : <>
       <p><Link href="/sign-in">Sign in</Link> · <Link href="/bank">Bank</Link> · <Link href="/hospital">Hospital</Link> · <Link href="/donor">Donor</Link> · <Link href="/registry">State admin</Link></p>
       {loading && <p role="status">Checking authenticated membership…</p>}{error && <div className="notice" role="alert"><p>{error}</p><button className="button button-secondary" onClick={() => window.location.reload()}>Retry</button></div>}
       {member && <><p role="status">Private updates: {live.paused ? "paused after 120 attempts" : "bounded polling every five seconds while visible"}. Reconnect fetches current authorized records.</p><button className="button button-secondary" onClick={live.resume}>Refresh private records</button><section className="panel feature-panel registry-panel"><h2>Authorized scope · {member.role}</h2>{profile && <><Records rows={[profile]} /><form onSubmit={async event => {
         event.preventDefault(); setNotice(""); setError("");
-        try { const result = await api(parent, role === "DONOR" ? { nickname: name } : { name }); setProfile(result.record!); setNotice("Synthetic display name saved in Atlas."); } catch (e) { setError((e as Error).message); }
-      }}><label htmlFor="registry-name">Synthetic display name</label><input id="registry-name" value={name} maxLength={80} required onChange={e => setName(e.target.value)} /><button className="button button-secondary" type="submit">Save display name</button></form></>}{notice && <p role="status">{notice}</p>}</section>
+        try { const result = await api(parent, role === "DONOR" ? { nickname: name } : { name }); setProfile(result.record!); setNotice("Display name saved."); } catch (e) { setError((e as Error).message); }
+      }}><label htmlFor="registry-name">Display name</label><input id="registry-name" value={name} maxLength={80} required onChange={e => setName(e.target.value)} /><button className="button button-secondary" type="submit">Save display name</button></form></>}{notice && <p role="status">{notice}</p>}</section>
       {(role === "BANK" || role === "HOSPITAL") && <PortalWorkflow parent={parent} role={role} onChanged={changed} />}
       {role === "BANK" && member?.bankId && <BankWatchdog bankId={member.bankId} onChanged={changed} />}
       {role === "STATE_ADMIN" && <><RegistryForecast /><OpsCopilot registry /></>}
@@ -86,7 +86,7 @@ function Portal({ role, configured }: { role: Role; configured: boolean }) {
         try { const result = await api(`${parent}/${resource}?after=${encodeURIComponent(next)}`); if (version !== refreshVersion.current) return; setRows(current => [...current, ...result.records ?? []]); setNext(result.next ?? null); } catch (e) { if (version === refreshVersion.current) setError((e as Error).message); }
       }}>Load more</button>}</section></>}
     </>}
-    <div className="notice"><p>Bank and Hospital actions use the authenticated registry. Simulation controls use separate browser fixtures. Teaching model, not clinical software.</p></div></>;
+    <div className="notice"><p>Access to records is controlled by your authenticated role and institution. Actions taken here are applied to the connected database.</p></div></>;
 }
 
 function ConfiguredPortal({ role }: { role: Role }) {
