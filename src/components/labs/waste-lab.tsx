@@ -23,7 +23,7 @@ export function WasteLab() {
   function run() {
     try {
       const parsed = wasteConfig(config); cancel(); setError(""); setResult(null); setProgress({ completed: 0, policy: "NEAREST", day: 0 });
-      const instance = new Worker(new URL("../workers/waste.worker.ts", import.meta.url), { type: "module" }); worker.current = instance;
+      const instance = new Worker(new URL("../../workers/waste.worker.ts", import.meta.url), { type: "module" }); worker.current = instance;
       instance.onerror = () => { if (worker.current === instance) { cancel(); setError("The comparison worker stopped. Retry the run."); } };
       instance.onmessage = event => {
         if (worker.current !== instance) return;

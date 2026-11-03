@@ -22,7 +22,7 @@ export function WorkerCheck() {
     cleanup();
     setState("loading");
     try {
-      const worker = new Worker(new URL("../workers/simulation.worker.ts", import.meta.url), { type: "module" });
+      const worker = new Worker(new URL("../../workers/simulation.worker.ts", import.meta.url), { type: "module" });
       workerRef.current = worker;
       const fail = () => { cleanup(); setState("error"); };
       worker.onerror = fail;

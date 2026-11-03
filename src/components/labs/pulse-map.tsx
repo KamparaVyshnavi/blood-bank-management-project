@@ -28,7 +28,7 @@ export function PulseMap() {
     let initialStorageNote = "";
     const timeout = setTimeout(() => setError("Simulation worker did not respond. Reload to retry."), 20_000);
     try {
-      worker = new Worker(new URL("../workers/simulation.worker.ts", import.meta.url), { type: "module" });
+      worker = new Worker(new URL("../../workers/simulation.worker.ts", import.meta.url), { type: "module" });
       workerRef.current = worker;
       const fail = () => { clearTimeout(timeout); setRunning(false); setBusy(false); setError("Simulation worker unavailable. Reload to retry in a browser with Web Workers."); };
       worker.onerror = fail; worker.onmessageerror = fail;
