@@ -1,4 +1,4 @@
-import { PublicBoard } from "@/components/public-board";
+import { PublicBoard } from "@/components/portals/public-board";
 
 export const metadata = { title: "Public Board" };
 

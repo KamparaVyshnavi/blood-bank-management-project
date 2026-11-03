@@ -1,4 +1,4 @@
-import { RegistryPortal } from "@/components/registry-portal";
+import { RegistryPortal } from "@/components/portals/registry-portal";
 import { clerkConfigured } from "@/server/identity";
 
 export const metadata = { title: "Hospitals" };

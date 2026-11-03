@@ -1,16 +1,17 @@
-import type { Metadata } from "next";
-import { AppShell } from "@/components/app-shell";
+import type { Metadata, Viewport } from "next";
+import { AppShell } from "@/components/layout/app-shell";
 import "./globals.css";
 import { ClerkProvider } from "@clerk/nextjs";
 
 export const metadata: Metadata = {
   title: { default: "PulseGrid", template: "%s | PulseGrid" },
-  description: "Cloud-Based Blood Bank Management & Emergency Coordination Platform.",
+  description: "Blood bank inventory and emergency coordination.",
   robots: { index: false, follow: false },
   icons: { icon: "/icon.svg", apple: "/donor-192.png" },
   manifest: "/manifest.webmanifest",
   appleWebApp: { capable: true, title: "PulseGrid", statusBarStyle: "default" }
 };
+export const viewport: Viewport = { width: "device-width", initialScale: 1, themeColor: "#0b0507" };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   const app = <AppShell>{children}</AppShell>;

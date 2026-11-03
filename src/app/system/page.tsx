@@ -1,6 +1,6 @@
 import { LoadingState } from "@/components/ui/states";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { WorkerCheck } from "@/components/worker-check";
+import { WorkerCheck } from "@/components/layout/worker-check";
 
 export const metadata = { title: "System foundation" };
 

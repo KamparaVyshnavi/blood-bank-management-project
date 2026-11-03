@@ -3,7 +3,7 @@ import Link from "next/link";
 export const metadata = { title: "Operational Scenarios" };
 
 const scenes = [
-  { href: "/inventory", title: "Explain a safe match", steps: "Keep A+ PRBC, quantity 2 and use in 2 hours. Inspect why expired and unscreened stock is excluded. Reserve, cancel, reserve again, then issue.", reset: "Reset fixture restores this page's sample units." },
+  { href: "/labs/inventory", title: "Explain a safe match", steps: "Keep A+ PRBC, quantity 2 and use in 2 hours. Inspect why expired and unscreened stock is excluded. Reserve, cancel, reserve again, then issue.", reset: "Reset fixture restores this page's sample units." },
   { href: "/match-lab", title: "Reverse the plasma rule", steps: "Select A+ to O− in PRBC: rejected. Switch to FFP and inspect the explanation. Platelets use an identical-group rule. Enable the isolated Bombay example to discuss eight-group boundaries.", reset: "Reload restores the initial selection." },
   { href: "/code-red", title: "Emergency coordination workflow", steps: "Simulate emergency request intake, dispatch reserved stock, advance simulated time, confirm handover, and verify transfusion record.", reset: "Reset journey." },
   { href: "/duel", title: "Concurrency and atomic claims", steps: "Inspect single ownership and zero double allocations under concurrent hospital demand.", reset: "Reset restores the isolated browser fixture." },

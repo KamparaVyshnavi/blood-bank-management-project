@@ -1,5 +1,5 @@
-import { AuditMeter } from "@/components/audit-meter";
-import { RegistryPortal } from "@/components/registry-portal";
+import { AuditMeter } from "@/components/portals/audit-meter";
+import { RegistryPortal } from "@/components/portals/registry-portal";
 import { clerkConfigured } from "@/server/identity";
 
 export const metadata = { title: "Reports & Analytics" };

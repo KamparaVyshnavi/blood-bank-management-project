@@ -5,5 +5,5 @@ export function EmptyState({ title, children }: { title: string; children: React
 }
 
 export function LoadingState() {
-  return <section className="panel loading-state" role="status"><span className="eyebrow">PULSEGRID</span><h1>Loading…</h1><div className="skeleton" aria-hidden="true" /><div className="skeleton short" aria-hidden="true" /><p>Preparing the view.</p></section>;
+  return <div className="ds-page" role="status" aria-label="Loading"><div className="skeleton" style={{ height: 34, width: 220 }} aria-hidden="true" /><div className="ds-stat-grid" aria-hidden="true">{[0, 1, 2, 3].map(i => <div key={i} className="ds-stat"><div className="skeleton short" /><div className="skeleton" style={{ height: 30, width: 70 }} /></div>)}</div><span className="ds-sr">Loading…</span></div>;
 }

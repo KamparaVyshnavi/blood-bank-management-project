@@ -1,4 +1,4 @@
-import { Duel } from "@/components/duel";
+import { Duel } from "@/components/labs/duel";
 
 export const metadata = { title: "Concurrency Lab" };
 

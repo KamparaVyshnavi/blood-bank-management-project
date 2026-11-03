@@ -1,4 +1,4 @@
-import { VitalSigns } from "@/components/vital-signs";
+import { VitalSigns } from "@/components/labs/vital-signs";
 
 export const metadata = { title: "System Health" };
 
