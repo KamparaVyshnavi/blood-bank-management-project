@@ -1,8 +1,8 @@
 // Playwright/Vite-only fixture; never exposed as a production application route.
 import { createRoot } from "react-dom/client";
 import { useCallback, useState } from "react";
-import { PublicBoard } from "../src/components/public-board";
-import { PortalWorkflow } from "../src/components/portal-workflows";
+import { PublicBoard } from "../src/components/portals/public-board";
+import { PortalWorkflow } from "../src/components/portals/portal-workflows";
 import { announceRegistryChange, useLiveRefresh } from "../src/lib/live-updates";
 import "../src/app/globals.css";
 function Probe() {
