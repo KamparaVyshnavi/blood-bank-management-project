@@ -14,14 +14,19 @@ const admin = v.object({ role: v.oneOf(["STATE_ADMIN"]), stateId: common.stateId
 const bank = v.object({ ...common, role: v.oneOf(["BANK"]), bankId: id });
 const hospital = v.object({ ...common, role: v.oneOf(["HOSPITAL"]), hospitalId: id });
 const donor = v.object({ ...common, role: v.oneOf(["DONOR"]), donorId: id });
-export function principalFromMetadata(userId: string, input: unknown) {
+export type Principal =
+  | { userId: string; role: "STATE_ADMIN"; stateId: string }
+  | { userId: string; role: "BANK"; stateId: string; tenantId: string; bankId: string }
+  | { userId: string; role: "HOSPITAL"; stateId: string; tenantId: string; hospitalId: string }
+  | { userId: string; role: "DONOR"; stateId: string; tenantId: string; donorId: string };
+
+export function principalFromMetadata(userId: string, input: unknown): Principal {
   try {
     const role = (input as { role?: unknown } | null)?.role;
     const membership = role === "STATE_ADMIN" ? admin(input) : role === "BANK" ? bank(input) : role === "HOSPITAL" ? hospital(input) : donor(input);
-    return { userId, ...membership };
+    return { userId, ...membership } as Principal;
   } catch { return deny("MEMBERSHIP_REQUIRED"); }
 }
-export type Principal = ReturnType<typeof principalFromMetadata>;
 export function clerkConfigured() { return Boolean(process.env.CLERK_SECRET_KEY && process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY); }
 export async function identity(): Promise<Principal> {
   if (!clerkConfigured()) throw new RegistryError(503, "AUTH_NOT_CONFIGURED");

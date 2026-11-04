@@ -68,11 +68,32 @@ it("retains deduplicated workflow failure alerts and preserves already completed
   await workflowFailure(request.requestId, "orchestration", async () => db);
   await workflowFailure(request.requestId, "orchestration", async () => db);
   expect((await c("requests").findOne({ _id: request.requestId }))?.workflow.status).toBe("FAILED");
+  expect((await c("requests").findOne({ _id: request.requestId }))?.status).toBe("FAILED");
+  expect(await new Operations(db, hospital, now).dispatchWorkflow(request.requestId, "failed-workflow-dispatch")).toMatchObject({ dispatched: false, reason: "REQUEST_CLOSED_OR_DUE" });
   expect(await c("operations").countDocuments({ tenantId: "state-workflow-alert" })).toBe(1);
   await c("requests").updateOne({ _id: request.requestId }, { $set: { "workflow.status": "COMPLETED" } });
   await workflowFailure(request.requestId, "signal", async () => db);
   expect((await c("requests").findOne({ _id: request.requestId }))?.workflow.status).toBe("COMPLETED");
   expect(await c("operations").countDocuments({ tenantId: "state-workflow-alert" })).toBe(2);
+});
+it("rejects malformed cloud signal timestamps before persisting an event", async () => {
+  const request = await init();
+  const value = await signal(request.requestId, "cancel", { key: "timestamp-check" });
+  await expect(store().ingest({ ...value, receivedAt: "not-a-timestamp" })).rejects.toMatchObject({ code: "INVALID_EVENT" });
+  expect(await c("workflowSignals").countDocuments()).toBe(1);
+});
+it("records a valid stock-ready wake signal as applied rather than rejected", async () => {
+  const request = await init();
+  await unit("ready-stock");
+  const value = await signal(request.requestId, "stock.ready", { key: "stock-ready", unitId: "ready-stock" }, bank);
+  await store().reconcile(request.requestId);
+  expect(await c("workflowSignals").findOne({ _id: value.signalId })).toMatchObject({ status: "APPLIED" });
+});
+it("fails closed when a persisted signal id is occupied by a different fingerprint", async () => {
+  const request = await init();
+  const value = await signal(request.requestId, "cancel", { key: "collision-check" });
+  await c("workflowSignals").updateOne({ _id: value.signalId }, { $set: { fingerprint: "corrupt-fingerprint" } });
+  await expect(store().ingest(value)).rejects.toMatchObject({ code: "SIGNAL_IDEMPOTENCY_CONFLICT" });
 });
 const deps = (overrides: Partial<EmergencyDependencies> = {}): EmergencyDependencies => ({ identity: async () => hospital, database: async () => db, send: async payload => { sent.push(payload); return { ids: [payload.id] }; }, configured: () => {}, secret: () => "test-receipt-secret-with-at-least-32-characters", now: () => now, log: () => {}, ...overrides });
 async function api(path = "", body?: unknown, overrides: Partial<EmergencyDependencies> = {}, receipt?: string) {
@@ -119,6 +140,28 @@ describe("durable acknowledgement and tenant boundaries", () => {
   it("does not accept an empty provider acknowledgement", async () => {
     const result = await api("", data().input, { send: async () => ({ ids: [] }) });
     expect(result.status).toBe(503); expect(result.body).not.toHaveProperty("accepted", true);
+  });
+  it("returns a stable retry identity when signal delivery acknowledgement is uncertain", async () => {
+    const request = await init();
+    const attempted: string[] = [];
+    const failed = await api(`${request.requestId}/cancel`, { key: "uncertain-cancel" }, { send: async payload => { attempted.push(payload.id); throw new Error("provider response lost"); } });
+    expect(failed.status).toBe(503);
+    expect(failed.body).toMatchObject({ accepted: false, status: "SIGNAL_ACKNOWLEDGEMENT_UNKNOWN", requestId: request.requestId, retrySamePayload: true });
+    expect(failed.body.signalId).toMatch(/^signal-[a-f0-9]{64}$/);
+    const retried = await api(`${request.requestId}/cancel`, { key: "uncertain-cancel" });
+    expect(retried.status).toBe(202);
+    expect(retried.body.signalId).toBe(failed.body.signalId);
+    expect(sent[0].id).toBe(failed.body.signalId);
+    expect(attempted).toEqual([failed.body.signalId]);
+  });
+  it("treats malformed provider acknowledgements as uncertain for both intake paths", async () => {
+    const created = await api("", data().input, { send: async () => ({ ids: [""] }) });
+    expect(created.status).toBe(503);
+    expect(created.body).toMatchObject({ accepted: false, status: "ACKNOWLEDGEMENT_UNKNOWN", retrySamePayload: true });
+    const request = await init();
+    const signal = await api(`${request.requestId}/cancel`, { key: "malformed-ack" }, { send: async () => ({ ids: [""] }) });
+    expect(signal.status).toBe(503);
+    expect(signal.body).toMatchObject({ accepted: false, status: "SIGNAL_ACKNOWLEDGEMENT_UNKNOWN", requestId: request.requestId, retrySamePayload: true });
   });
   it("rejects forged receipts, unknown request IDs and cross-tenant access", async () => {
     const ack = await api("", data().input);
@@ -196,12 +239,30 @@ describe("real transaction workflow paths with injected durable waits", () => {
 });
 
 describe("idempotency, correlation and readiness gates", () => {
+  it("rejects donor replies when the alert tenant does not match the authenticated donor", async () => {
+    const d = await init(); await store().wave(d.requestId, 0);
+    await c("alerts").updateOne({ requestId: d.requestId, donorId: "donor-1" }, { $set: { tenantId: "tenant-other-donor" } });
+    await expect(store().authorizeSignal(await store().request(d.requestId), donor, "donor.reply", { key: "foreign-alert", donorId: "donor-1", reply: "ACCEPTED" })).rejects.toMatchObject({ status: 403, code: "WAVE_MEMBERSHIP_REQUIRED" });
+  });
+
   it("duplicates initialization, notification waves and responses without duplicate records", async () => {
     const d = data(); await Promise.all(Array.from({ length: 5 }, () => store().initialize(d, "run", "event")));
     await store().wave(d.requestId, 0); await store().wave(d.requestId, 0);
     const response = await signal(d.requestId, "donor.reply", { key: "reply", donorId: "donor-1", reply: "ACCEPTED" }, donor);
     await store().ingest(response); await store().reconcile(d.requestId); await store().reconcile(d.requestId);
     expect(await c("requests").countDocuments()).toBe(1); expect(await c("alerts").countDocuments()).toBe(1); expect(await c("workflowSignals").countDocuments()).toBe(1);
+  });
+  it("recovers a donor-reply signal after the alert update committed but signal acknowledgement did not", async () => {
+    const d = await init(); await store().wave(d.requestId, 0);
+    const alert = await c("alerts").findOne({ requestId: d.requestId, donorId: "donor-1" });
+    expect(alert).toBeTruthy();
+    const response = await signal(d.requestId, "donor.reply", { key: "reply-recovery", donorId: "donor-1", reply: "ACCEPTED" }, donor);
+    await store().ingest(response);
+    // Simulate a worker crash after its alert write but before marking the signal.
+    await c("alerts").updateOne({ _id: alert!._id }, { $set: { status: "ACCEPTED", repliedAt: now } });
+    await store().reconcile(d.requestId);
+    expect((await c("workflowSignals").findOne({ _id: response.signalId }))?.status).toBe("APPLIED");
+    expect((await c("alerts").findOne({ _id: alert!._id }))?.status).toBe("ACCEPTED");
   });
   it("enforces alert cooldown across different requests", async () => {
     const a = await init(), b = await init(data({ key: "second" })); await store().wave(a.requestId, 0); await store().wave(b.requestId, 0);

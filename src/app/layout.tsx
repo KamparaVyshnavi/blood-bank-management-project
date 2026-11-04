@@ -24,25 +24,8 @@ export const viewport: Viewport = {
   themeColor: "#0b0507",
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{ children: React.ReactNode }>) {
-  const app = (
-    <DemoDataProvider>
-      <AppShell>{children}</AppShell>
-    </DemoDataProvider>
-  );
-
-  return (
-    <html lang="en">
-      <body>
-        {process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY &&
-        process.env.CLERK_SECRET_KEY ? (
-          <ClerkProvider>{app}</ClerkProvider>
-        ) : (
-          app
-        )}
-      </body>
-    </html>
-  );
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  const authConfigured = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY && process.env.CLERK_SECRET_KEY);
+  const app = <AppShell authConfigured={authConfigured}>{children}</AppShell>;
+  return <html lang="en"><body>{authConfigured ? <ClerkProvider>{app}</ClerkProvider> : app}</body></html>;
 }

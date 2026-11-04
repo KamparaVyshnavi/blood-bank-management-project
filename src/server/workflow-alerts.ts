@@ -12,5 +12,5 @@ export async function workflowFailure(requestId: string, source: "orchestration"
   console.error(JSON.stringify({ event: "pulsegrid.alert", kind: "WORKFLOW_FAILURE", source, requestId, correlationId: requestId }));
   const db = await connect(), id = `workflow-alert-${createHash("sha256").update(`${source}:${requestId}`).digest("hex")}`;
   await db.collection<WorkflowRow>("operations").updateOne({ _id: id }, { $setOnInsert: { id, stateId: STATE_ID, tenantId: "state-workflow-alert", fingerprint: id, createdAt: new Date(), result: { kind: "WORKFLOW_FAILURE", source, requestId } } }, { upsert: true });
-  if (source === "orchestration") await db.collection("requests").updateOne({ id: requestId, "workflow.status": { $nin: ["COMPLETED", "CANCELLED", "ESCALATED"] } }, { $set: { "workflow.status": "FAILED", "workflow.reason": "RETRIES_EXHAUSTED_INSPECT_INNGEST", "workflow.updatedAt": new Date() } });
+  if (source === "orchestration") await db.collection<{ _id: string; [key: string]: unknown }>("requests").updateOne({ _id: requestId, stateId: STATE_ID, "workflow.status": { $nin: ["COMPLETED", "CANCELLED", "ESCALATED", "FAILED"] } }, { $set: { status: "FAILED", "workflow.status": "FAILED", "workflow.reason": "RETRIES_EXHAUSTED_INSPECT_INNGEST", "workflow.updatedAt": new Date() } });
 }

@@ -49,7 +49,7 @@ export function parseUnit(value: unknown) {
   return result;
 }
 export type Unit = ReturnType<typeof parseUnit>;
-const request = v.object({ id: v.text, hospitalId: v.text, group: parseGroup, component: parseComponent, quantity: v.number(1, 1000, true), allocatedQuantity: v.number(0, 1000, true), transfusedQuantity: v.number(0, 1000, true), urgency: v.oneOf(["ROUTINE", "URGENT", "CRITICAL"]), expectedTransfusionAt: v.instant, status: v.oneOf(["OPEN", "PARTIAL", "ALLOCATED", "COMPLETED", "CANCELLED", "ESCALATED"]) });
+const request = v.object({ id: v.text, hospitalId: v.text, group: parseGroup, component: parseComponent, quantity: v.number(1, 1000, true), allocatedQuantity: v.number(0, 1000, true), transfusedQuantity: v.number(0, 1000, true), urgency: v.oneOf(["ROUTINE", "URGENT", "CRITICAL"]), expectedTransfusionAt: v.instant, status: v.oneOf(["OPEN", "PARTIAL", "ALLOCATED", "COMPLETED", "CANCELLED", "ESCALATED", "FAILED"]) });
 export function parseRequest(value: unknown) {
   const result = request(value, "request");
   if (result.allocatedQuantity > result.quantity || result.transfusedQuantity > result.allocatedQuantity) v.invalid("request", "quantity counters disagree");

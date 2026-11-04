@@ -1,7 +1,11 @@
-/**
- * Role used to decide which navigation items appear.
- * FRONTEND-ONLY placeholder: when Clerk roles are wired in, derive this from the session.
- * Hiding navigation is not authorization — the API must enforce every permission.
- */
-export type Role = "STATE_ADMIN" | "BLOOD_BANK" | "HOSPITAL";
-export const currentRole: Role = "STATE_ADMIN";
+/** Role values mirror the server-validated Clerk registry membership. */
+export type Role = "STATE_ADMIN" | "BANK" | "HOSPITAL" | "DONOR";
+
+/** Parse only the role label for navigation; this is never an authorization check. */
+export function navigationRole(metadata: unknown): Role | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const registry = (metadata as { registry?: unknown }).registry;
+  if (!registry || typeof registry !== "object" || Array.isArray(registry)) return null;
+  const role = (registry as { role?: unknown }).role;
+  return role === "STATE_ADMIN" || role === "BANK" || role === "HOSPITAL" || role === "DONOR" ? role : null;
+}

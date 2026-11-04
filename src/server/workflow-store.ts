@@ -21,18 +21,32 @@ export const workflowDigest = (value: unknown) => createHash("sha256").update(JS
 const location = (row: WorkflowRow) => ({ longitude: row.location.coordinates[0] as number, latitude: row.location.coordinates[1] as number });
 const alive = (now: Date) => ({ $or: [{ audience: false, expireAt: { $exists: false } }, { audience: true, expireAt: { $type: "date", $gt: now } }] });
 export function checkedActor(actor: Principal) {
+  if (!actor || typeof actor !== "object" || Array.isArray(actor)) throw new RegistryError(400, "INVALID_EVENT");
   const { userId, ...metadata } = actor;
-  return principalFromMetadata(workflowId(userId), metadata);
+  if (typeof userId !== "string") throw new RegistryError(400, "INVALID_EVENT");
+  let id: string;
+  try { id = workflowId(userId); } catch { throw new RegistryError(400, "INVALID_EVENT"); }
+  return principalFromMetadata(id, metadata);
+}
+function canonicalTimestamp(value: unknown, code = "INVALID_EVENT") {
+  if (typeof value !== "string") throw new RegistryError(400, code);
+  const milliseconds = Date.parse(value);
+  if (!Number.isFinite(milliseconds)) throw new RegistryError(400, code);
+  const parsed = new Date(milliseconds);
+  if (parsed.toISOString() !== value) throw new RegistryError(400, code);
+  return parsed;
 }
 export function creationData(data: CreatedData): CreatedData {
+  if (!data || typeof data !== "object" || Array.isArray(data)) throw new RegistryError(400, "INVALID_EVENT");
   const actor = checkedActor(data.actor), input = validate(emergencyInput, data.input);
+  const acceptedAt = canonicalTimestamp(data.acceptedAt);
   if (actor.role !== "HOSPITAL") deny();
   const fingerprint = workflowDigest(input);
   const requestId = `emergency-${workflowDigest([actor.stateId, actor.tenantId, actor.hospitalId, input]).slice(0, 48)}`;
-  if (data.fingerprint !== fingerprint || data.requestId !== requestId || !Number.isFinite(Date.parse(data.acceptedAt))) throw new RegistryError(400, "INVALID_EVENT");
-  const duration = Date.parse(input.expectedTransfusionAt) - Date.parse(data.acceptedAt);
+  if (data.fingerprint !== fingerprint || data.requestId !== requestId) throw new RegistryError(400, "INVALID_EVENT");
+  const duration = Date.parse(input.expectedTransfusionAt) - acceptedAt.getTime();
   if (duration <= 0 || duration > 86_400_000) throw new RegistryError(400, "DEADLINE_OUT_OF_RANGE");
-  return { ...data, actor, input };
+  return { ...data, actor, input, acceptedAt: acceptedAt.toISOString() };
 }
 export class WorkflowStore {
   constructor(readonly db: Db, readonly now = new Date()) {}
@@ -76,7 +90,7 @@ export class WorkflowStore {
     if (kind === "donor.reply") {
       if (actor.role !== "DONOR" || !("donorId" in input) || actor.donorId !== input.donorId) deny();
       if (!await this.c("donors").findOne({ _id: actor.donorId, tenantId: actor.tenantId, stateId: actor.stateId, ...alive(this.now) })) deny();
-      if (!await this.c("alerts").findOne({ requestId: req.id, donorId: actor.donorId, stateId: actor.stateId })) deny("WAVE_MEMBERSHIP_REQUIRED");
+      if (!await this.c("alerts").findOne({ requestId: req.id, requestTenantId: req.tenantId, hospitalId: req.hospitalId, donorId: actor.donorId, stateId: actor.stateId, tenantId: actor.tenantId })) deny("WAVE_MEMBERSHIP_REQUIRED");
     }
     if (kind === "stock.ready" || kind === "dispatch.approved") {
       if (actor.role !== "BANK" || !input.unitId) deny();
@@ -91,17 +105,22 @@ export class WorkflowStore {
     }
   }
   async ingest(raw: SignalData) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new RegistryError(400, "INVALID_EVENT");
     const kind = validate(value => { if (!SIGNALS.includes(value as SignalData["kind"])) throw new Error(); return value as SignalData["kind"]; }, raw.kind);
-    const data: SignalData = { ...raw, requestId: validate(workflowId, raw.requestId), actor: checkedActor(raw.actor), kind, input: validate(v => signalInput(kind, v), raw.input) };
+    const receivedAt = canonicalTimestamp(raw.receivedAt);
+    const data: SignalData = { ...raw, requestId: validate(workflowId, raw.requestId), actor: checkedActor(raw.actor), kind, input: validate(v => signalInput(kind, v), raw.input), receivedAt: receivedAt.toISOString() };
     const fingerprint = workflowDigest([data.requestId, data.actor, data.kind, data.input]);
     if (data.signalId !== `signal-${fingerprint}`) throw new RegistryError(400, "INVALID_EVENT");
     // Persist before processing. A cancellation may arrive before request initialization.
-    await this.c("workflowSignals").updateOne({ _id: data.signalId }, { $setOnInsert: { _id: data.signalId, id: data.signalId, requestId: data.requestId, stateId: data.actor.stateId, tenantId: "tenantId" in data.actor ? data.actor.tenantId : "state", kind, fingerprint, data, status: "PENDING", createdAt: new Date(data.receivedAt) } }, { upsert: true });
+    await this.c("workflowSignals").updateOne({ _id: data.signalId }, { $setOnInsert: { _id: data.signalId, id: data.signalId, requestId: data.requestId, stateId: data.actor.stateId, tenantId: "tenantId" in data.actor ? data.actor.tenantId : "state", kind, fingerprint, data, status: "PENDING", createdAt: receivedAt } }, { upsert: true });
+    // Fail closed if a corrupted or conflicting row already occupies this idempotency key.
+    const stored = await this.c("workflowSignals").findOne({ _id: data.signalId }, { projection: { requestId: 1, stateId: 1, tenantId: 1, kind: 1, fingerprint: 1 } });
+    if (!stored || stored.requestId !== data.requestId || stored.stateId !== data.actor.stateId || stored.kind !== kind || stored.fingerprint !== fingerprint || stored.tenantId !== ("tenantId" in data.actor ? data.actor.tenantId : "state")) throw new RegistryError(409, "SIGNAL_IDEMPOTENCY_CONFLICT");
     return { requestId: data.requestId };
   }
   async reconcile(requestId: string) {
     const req = await this.request(requestId);
-    const pending = await this.c("workflowSignals").find({ requestId, status: "PENDING" }).sort({ createdAt: 1, _id: 1 }).limit(100).toArray();
+    const pending = await this.c("workflowSignals").find({ requestId, stateId: req.stateId, status: "PENDING" }).sort({ createdAt: 1, _id: 1 }).limit(100).toArray();
     // Cancellation/escalation wins over approvals and replies delivered in the same batch.
     pending.sort((a, b) => Number(["cancel", "escalate"].includes(b.kind)) - Number(["cancel", "escalate"].includes(a.kind)));
     for (const signal of pending) {
@@ -111,8 +130,26 @@ export class WorkflowStore {
         if (WORKFLOW_TERMINAL.includes(current.workflow.status)) throw new RegistryError(409, "WORKFLOW_CLOSED");
         await this.authorizeSignal(current, data.actor, data.kind, body);
         if (data.kind === "cancel" || data.kind === "escalate") await this.operations(current).closeWorkflow(requestId, signal.id, data.kind === "cancel" ? "CANCELLED" : "ESCALATED", "STAFF_REQUESTED");
-        if (data.kind === "donor.reply" && "donorId" in body) await this.c("alerts").updateOne({ requestId, donorId: body.donorId, status: "PENDING", deadlineAt: { $gt: new Date(data.receivedAt) } }, { $set: { status: body.reply, repliedAt: new Date(data.receivedAt) } });
-        if (data.kind === "dispatch.approved" && "allocationId" in body && "preparationConfirmed" in body) await this.c("allocations").updateOne({ id: body.allocationId, unitId: body.unitId, requestId, status: "ACTIVE" }, { $set: { dispatchApproved: true, preparationConfirmed: body.preparationConfirmed } });
+        if (data.kind === "donor.reply" && "donorId" in body) {
+          if (data.actor.role !== "DONOR") deny();
+          const filter = { requestId, requestTenantId: current.tenantId, hospitalId: current.hospitalId, donorId: body.donorId, stateId: current.stateId, tenantId: data.actor.tenantId, status: "PENDING", deadlineAt: { $gt: new Date(data.receivedAt) } };
+          const updated = await this.c("alerts").updateOne(filter, { $set: { status: body.reply, repliedAt: new Date(data.receivedAt) } });
+          if (updated.modifiedCount !== 1) {
+            // A worker may have committed the alert update and crashed before
+            // marking the signal. Accept only that exact already-applied state.
+            const existing = await this.c("alerts").findOne({ requestId, requestTenantId: current.tenantId, hospitalId: current.hospitalId, donorId: body.donorId, stateId: current.stateId, tenantId: data.actor.tenantId });
+            if (existing?.status !== body.reply) throw new RegistryError(409, "ALERT_RESPONSE_CONFLICT");
+          }
+        }
+        if (data.kind === "dispatch.approved" && "allocationId" in body && "preparationConfirmed" in body) {
+          if (data.actor.role !== "BANK") deny();
+          const filter = { id: body.allocationId, unitId: body.unitId, requestId, stateId: current.stateId, bankTenantId: data.actor.tenantId, bankId: data.actor.bankId, status: "ACTIVE" };
+          const updated = await this.c("allocations").updateOne(filter, { $set: { dispatchApproved: true, preparationConfirmed: body.preparationConfirmed } });
+          if (updated.modifiedCount !== 1) {
+            const existing = await this.c("allocations").findOne({ ...filter, dispatchApproved: true, preparationConfirmed: body.preparationConfirmed });
+            if (!existing) throw new RegistryError(409, "ALLOCATION_APPROVAL_CONFLICT");
+          }
+        }
         // Determine whether this signal caused a state‑changing mutation
         let __signalApplied = false;
         if ((data.kind === "handover" || data.kind === "synthetic-use") && body.unitId) {
@@ -123,12 +160,12 @@ export class WorkflowStore {
             __signalApplied = true;
           }
         }
-        // For signals that inherently modify state, consider them applied even if no mutation was needed.
-        const shouldMarkApplied = __signalApplied || ["cancel", "escalate", "donor.reply", "dispatch.approved"].includes(data.kind);
-        await this.c("workflowSignals").updateOne({ _id: signal.id }, { $set: { status: shouldMarkApplied ? "APPLIED" : "REJECTED", processedAt: this.now, ...(shouldMarkApplied ? {} : { reason: "NO_STATE_CHANGE" }) } });
+        // Validated state-changing and wake signals are applied even when no additional mutation is needed.
+        const shouldMarkApplied = __signalApplied || ["cancel", "escalate", "donor.reply", "dispatch.approved", "stock.ready"].includes(data.kind);
+        await this.c("workflowSignals").updateOne({ _id: signal.id, requestId, stateId: req.stateId }, { $set: { status: shouldMarkApplied ? "APPLIED" : "REJECTED", processedAt: this.now, ...(shouldMarkApplied ? {} : { reason: "NO_STATE_CHANGE" }) } });
       } catch (error) {
         if (!(error instanceof RegistryError) || error.status >= 500) throw error;
-        await this.c("workflowSignals").updateOne({ _id: signal.id }, { $set: { status: "REJECTED", reason: error.code, processedAt: this.now } });
+        await this.c("workflowSignals").updateOne({ _id: signal.id, requestId, stateId: req.stateId }, { $set: { status: "REJECTED", reason: error.code, processedAt: this.now } });
       }
     }
     return { processed: pending.length, hospitalId: req.hospitalId };
@@ -136,9 +173,9 @@ export class WorkflowStore {
   async reserve(requestId: string, round: number) {
     await this.maintain(requestId, round);
     const req = await this.request(requestId);
-    if (WORKFLOW_TERMINAL.includes(req.workflow.status) || ["CANCELLED", "COMPLETED", "ESCALATED"].includes(req.status) || req.expectedTransfusionAt <= this.now) return { reserved: 0 };
+    if (WORKFLOW_TERMINAL.includes(req.workflow.status) || WORKFLOW_TERMINAL.includes(req.status) || req.expectedTransfusionAt <= this.now) return { reserved: 0 };
     const ops = this.operations(req);
-    await this.note(requestId, (await this.c("alerts").countDocuments({ requestId, status: "ACCEPTED" })) ? "AWAITING_SCREENED_STOCK" : "STOCK_SEARCH");
+    await this.note(requestId, (await this.c("alerts").countDocuments({ requestId, requestTenantId: req.tenantId, hospitalId: req.hospitalId, stateId: req.stateId, status: "ACCEPTED" })) ? "AWAITING_SCREENED_STOCK" : "STOCK_SEARCH");
     let reserved = 0;
     for (let index = 0; index < req.quantity; index++) {
       const result = await ops.post(["hospitals", req.hospitalId, "requests", requestId, "reserve"], { key: `${requestId}-${round}-${index}` });
@@ -149,7 +186,7 @@ export class WorkflowStore {
   }
   async maintain(requestId: string, round: number) {
     const req = await this.request(requestId);
-    if (WORKFLOW_TERMINAL.includes(req.workflow.status) || ["COMPLETED", "CANCELLED", "ESCALATED"].includes(req.status)) return;
+    if (WORKFLOW_TERMINAL.includes(req.workflow.status) || WORKFLOW_TERMINAL.includes(req.status)) return;
     await this.operations(req).post(["hospitals", req.hospitalId, "maintain"], { key: `${requestId}-${round}-maintain` });
   }
   async wave(requestId: string, index: number) {
@@ -166,7 +203,7 @@ export class WorkflowStore {
       const rows = bank ? await this.c("donors").aggregate<WorkflowRow>([{ $geoNear: { near: bank.location, distanceField: "distance", maxDistance: WAVE_RADII[index] * 1000, spherical: true, query: { stateId: req.stateId, ...alive(this.now), optedOut: { $ne: true } } } }, { $limit: 5000 }], { session }).toArray() : [];
       const recent = await this.c("alerts").find({ stateId: req.stateId, createdAt: { $gt: new Date(this.now.getTime() - 30 * 86_400_000) } }, { session }).limit(20_001).toArray();
       if (recent.length > 20_000) throw new RegistryError(503, "ALERT_SCAN_BOUND_REACHED");
-      const already = await this.c("alerts").find({ requestId }, { session }).toArray();
+      const already = await this.c("alerts").find({ requestId, requestTenantId: req.tenantId, hospitalId: req.hospitalId, stateId: req.stateId }, { session }).toArray();
       const profiles = rows.flatMap(row => {
         try {
           const donor = parseDonor(Object.fromEntries(["id", "nickname", "group", "birthDate", "weightKg", "haemoglobin", "donationVolumeMl", "lastDonationAt", "eligibleFrom", "deferrals"].map(k => [k, row[k] instanceof Date ? row[k].toISOString() : row[k]]).concat([["location", location(row)]])));
@@ -184,10 +221,15 @@ export class WorkflowStore {
         // Serialize competing requests' fatigue decisions on the donor document.
         await this.c("donors").updateOne({ _id: donor.id }, { $inc: { alertRevision: 1 } }, { session });
         const id = `alert-${workflowDigest([requestId, donor.id])}`;
-        await this.c("alerts").insertOne({ _id: id, id, stateId: req.stateId, tenantId: donor.tenantId, donorId: donor.id, requestId, status: "PENDING", createdAt: this.now, deadlineAt, wave: index, channel: "IN_APP", collectionBankId: bank.id, ...(donor.audience ? { expireAt: donor.expireAt } : {}) }, { session });
+        await this.c("alerts").insertOne({ _id: id, id, stateId: req.stateId, tenantId: donor.tenantId, donorId: donor.id, requestId, requestTenantId: req.tenantId, hospitalId: req.hospitalId, collectionBankTenantId: bank.tenantId, status: "PENDING", createdAt: this.now, deadlineAt, wave: index, channel: "IN_APP", collectionBankId: bank.id, ...(donor.audience ? { expireAt: donor.expireAt } : {}) }, { session });
       }
       const wave = { index, radiusKm: WAVE_RADII[index], count: sizing.count, probability: sizing.probability, targetMet: sizing.targetMet, openedAt: this.now, deadlineAt, collectionBankId: bank?.id ?? null };
-      await this.c("requests").updateOne({ _id: requestId }, { $set: { "workflow.waves": [...req.workflow.waves, wave], "workflow.updatedAt": this.now } }, { session });
+      const updated = await this.c("requests").updateOne(
+        { _id: requestId, "workflow.updatedAt": req.workflow.updatedAt },
+        { $set: { "workflow.waves": [...req.workflow.waves, wave], "workflow.updatedAt": this.now } },
+        { session },
+      );
+      if (updated.matchedCount !== 1) throw new RegistryError(409, "WORKFLOW_CHANGED");
       return wave;
     });
   }
@@ -201,11 +243,11 @@ export class WorkflowStore {
   }
   async snapshot(requestId: string) {
     const req = await this.request(requestId);
-    if (["COMPLETED", "CANCELLED", "ESCALATED"].includes(req.status)) await this.note(requestId, req.status);
+    if (WORKFLOW_TERMINAL.includes(req.status)) await this.note(requestId, req.status);
     const slots = await this.c("allocations").find({ requestId, stateId: req.stateId, hospitalTenantId: req.tenantId, hospitalId: req.hospitalId, status: { $ne: "RELEASED" } }).limit(21).toArray();
-    const alerts = await this.c("alerts").find({ requestId, status: "ACCEPTED" }).toArray();
+    const alerts = await this.c("alerts").find({ requestId, requestTenantId: req.tenantId, hospitalId: req.hospitalId, stateId: req.stateId, status: "ACCEPTED" }).toArray();
     const waves = req.workflow.waves as { index: number; deadlineAt: Date; count: number }[];
     const last = waves.at(-1);
-    return { status: ["COMPLETED", "CANCELLED", "ESCALATED"].includes(req.status) ? req.status as string : req.workflow.status as string, quantity: req.quantity as number, allocated: req.allocatedQuantity as number, transfused: req.transfusedQuantity as number, issued: slots.filter(s => s.status === "ISSUED" || s.status === "TRANSFUSED").length, handedOver: slots.filter(s => s.handoverAt || s.status === "TRANSFUSED").length, acceptedDonors: alerts.length, waveCount: waves.length, waveDue: !last || last.deadlineAt <= this.now, due: req.expectedTransfusionAt <= this.now, nextWakeAt: new Date(Math.min(this.now.getTime() + RECHECK_MS, req.expectedTransfusionAt.getTime(), last && last.deadlineAt > this.now ? last.deadlineAt.getTime() : Infinity)).toISOString() };
+    return { status: WORKFLOW_TERMINAL.includes(req.status) ? req.status as string : req.workflow.status as string, quantity: req.quantity as number, allocated: req.allocatedQuantity as number, transfused: req.transfusedQuantity as number, issued: slots.filter(s => s.status === "ISSUED" || s.status === "TRANSFUSED").length, handedOver: slots.filter(s => s.handoverAt || s.status === "TRANSFUSED").length, acceptedDonors: alerts.length, waveCount: waves.length, waveDue: !last || last.deadlineAt <= this.now, due: req.expectedTransfusionAt <= this.now, nextWakeAt: new Date(Math.min(this.now.getTime() + RECHECK_MS, req.expectedTransfusionAt.getTime(), last && last.deadlineAt > this.now ? last.deadlineAt.getTime() : Infinity)).toISOString() };
   }
 }
