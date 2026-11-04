@@ -15,7 +15,12 @@ const headers = { "Cache-Control": "private, no-store, max-age=0", Vary: "Cookie
 export async function readJsonInput(request: Request) {
   if (request.headers.get("origin") !== new URL(request.url).origin || request.headers.get("sec-fetch-site") === "cross-site") throw new RegistryError(403, "ORIGIN_DENIED");
   if (request.headers.get("content-type")?.split(";")[0].trim() !== "application/json") throw new RegistryError(415, "JSON_REQUIRED");
-  if (Number(request.headers.get("content-length")) > 8192) throw new RegistryError(413, "BODY_TOO_LARGE");
+  const contentLength = request.headers.get("content-length");
+  if (contentLength !== null) {
+    const declaredLength = Number(contentLength);
+    if (!Number.isSafeInteger(declaredLength) || declaredLength < 0) throw new RegistryError(400, "INVALID_INPUT");
+    if (declaredLength > 8192) throw new RegistryError(413, "BODY_TOO_LARGE");
+  }
   const reader = request.body?.getReader();
   if (!reader) throw new RegistryError(400, "INVALID_INPUT");
   const chunks: Uint8Array[] = []; let size = 0;
@@ -23,7 +28,7 @@ export async function readJsonInput(request: Request) {
     const { value, done } = await reader.read();
     if (done) break;
     size += value.byteLength;
-    if (size > 8192) { await reader.cancel(); throw new RegistryError(413, "BODY_TOO_LARGE"); }
+    if (size > 8192) { await reader.cancel().catch(() => undefined); throw new RegistryError(413, "BODY_TOO_LARGE"); }
     chunks.push(value);
   }
   try { return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown; } catch { throw new RegistryError(400, "INVALID_INPUT"); }

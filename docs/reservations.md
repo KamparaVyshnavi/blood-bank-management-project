@@ -10,7 +10,7 @@ Complete the [registry setup](registry.md) with a dedicated development/demo rep
 
 ```powershell
 # Temporary database-specific setup credential; stop the app during schema changes.
-npm run registry -- upgrade --confirm=pulsegrid_dev
+npm run registry -- upgrade --confirm=bloodbank_dev
 npm run registry -- verify
 ```
 

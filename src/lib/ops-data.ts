@@ -1,202 +1,243 @@
-/**
- * DATA LAYER — the only file the screens read from.
- *
- * Everything here is placeholder data so the frontend can be finished and reviewed
- * before the backend is connected. To go live, replace the body of each exported
- * `get*` function with a call to the real API/server module and keep the return types
- * (see ops-types.ts). No screen imports the sample arrays directly.
- */
-import { groupRows as groupRowsAt, expiringSoon as expiringSoonAt } from "./inventory-math";
-import { BLOOD_GROUPS, COMPONENTS, type Activity, type AppUser, type AuditEntry, type BankResponse, type BloodComponent, type BloodGroup, type BloodUnit, type Donor, type Emergency, type EmergencyStatus, type Institution, type PendingAction, type TimelineEvent, type UnitStatus, type Urgency } from "./ops-types";
+import "server-only";
+import { identity, type Principal } from "@/server/identity";
+import { database } from "@/server/mongodb";
+import { Registry } from "@/server/registry";
+import type { Document } from "mongodb";
+import { RegistryError } from "@/server/errors";
+import { readClerkDirectory } from "@/server/clerk-directory";
+import { type Activity, type BankResponse, type BloodUnit, type Donor, type Emergency, type PendingAction } from "./ops-types";
+import { asIso, donorFromRecord, emergencyFromRecord, institutionFromRecord, unitFromRecord } from "./ops-adapters";
+import { expiringSoon, groupRows } from "./inventory-math";
 
-const NOW = Date.now();
-const H = 3600000, D = 24 * H;
-const at = (hoursFromNow: number) => new Date(NOW + hoursFromNow * H).toISOString();
-
-// Small deterministic PRNG so the sample data is stable between renders.
-function rng(seed: number) { let s = seed; return () => (s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296; }
-
-/* ---------- Institutions ---------- */
-const institutions: Institution[] = [
-  { id: "bb-harbour", name: "Harbour City Blood Bank", type: "Blood bank", regId: "MH-BB-0112", district: "Mumbai City", state: "Maharashtra", contact: "+91 22 5550 0112", status: "Active", lastActivity: at(-0.4), admins: ["R. Kulkarni", "S. Fernandes"] },
-  { id: "bb-western", name: "Western Suburbs Blood Centre", type: "Blood bank", regId: "MH-BB-0147", district: "Mumbai Suburban", state: "Maharashtra", contact: "+91 22 5550 0147", status: "Active", lastActivity: at(-1.2), admins: ["A. Deshmukh"] },
-  { id: "bb-thane", name: "Thane Regional Blood Bank", type: "Blood bank", regId: "MH-BB-0203", district: "Thane", state: "Maharashtra", contact: "+91 22 5550 0203", status: "Active", lastActivity: at(-3), admins: ["M. Shaikh"] },
-  { id: "bb-pune", name: "Pune Central Blood Bank", type: "Blood bank", regId: "MH-BB-0318", district: "Pune", state: "Maharashtra", contact: "+91 20 5550 0318", status: "Active", lastActivity: at(-0.8), admins: ["P. Joshi", "N. Iyer"] },
-  { id: "bb-eastern", name: "Eastern Link Blood Bank", type: "Blood bank", regId: "MH-BB-0355", district: "Thane", state: "Maharashtra", contact: "+91 22 5550 0355", status: "Pending", lastActivity: at(-52), admins: ["V. Patil"] },
-  { id: "h-city", name: "City General Hospital", type: "Hospital", regId: "MH-H-1021", district: "Mumbai City", state: "Maharashtra", contact: "+91 22 5551 1021", status: "Active", lastActivity: at(-0.2), admins: ["Dr. T. Menon"] },
-  { id: "h-lotus", name: "Lotus Multispeciality Hospital", type: "Hospital", regId: "MH-H-1064", district: "Mumbai Suburban", state: "Maharashtra", contact: "+91 22 5551 1064", status: "Active", lastActivity: at(-1.7), admins: ["Dr. K. Rao"] },
-  { id: "h-sahyadri", name: "Sahyadri Trauma Centre", type: "Hospital", regId: "MH-H-1130", district: "Pune", state: "Maharashtra", contact: "+91 20 5551 1130", status: "Active", lastActivity: at(-0.5), admins: ["Dr. L. Bhosale"] },
-  { id: "h-creek", name: "Creekside Medical Centre", type: "Hospital", regId: "MH-H-1177", district: "Thane", state: "Maharashtra", contact: "+91 22 5551 1177", status: "Active", lastActivity: at(-6), admins: ["Dr. F. Khan"] },
-  { id: "h-rural", name: "Taluka Rural Hospital", type: "Hospital", regId: "MH-H-1209", district: "Pune", state: "Maharashtra", contact: "+91 20 5551 1209", status: "Suspended", lastActivity: at(-240), admins: ["Dr. G. More"] },
-];
-const banks = institutions.filter(i => i.type === "Blood bank");
-const hospitals = institutions.filter(i => i.type === "Hospital");
-const inst = (id: string) => institutions.find(i => i.id === id)!;
-
-/* ---------- Blood units (inventory is always derived from these) ---------- */
-const GROUP_WEIGHTS: Record<BloodGroup, number> = { "B+": 32, "O+": 30, "A+": 22, "AB+": 8, "O-": 3, "A-": 2, "B-": 2, "AB-": 1 };
-const SHELF: Record<BloodComponent, number> = { "Whole blood": 35, "Red cells": 42, "Plasma": 365, "Platelets": 5 };
-function buildUnits(): BloodUnit[] {
-  const r = rng(11);
-  const pickGroup = () => { let x = r() * 100; for (const g of BLOOD_GROUPS) { x -= GROUP_WEIGHTS[g]; if (x <= 0) return g; } return "O+" as BloodGroup; };
-  const out: BloodUnit[] = [];
-  for (let i = 1; i <= 230; i++) {
-    const group = pickGroup();
-    const component = COMPONENTS[Math.floor(r() * r() * COMPONENTS.length)]; // skew toward whole blood / red cells
-    const bank = banks[Math.floor(r() * 4)];
-    // Keep collection dates in the past and make the Expired status agree with
-    // the component-specific shelf-life date shown to users.
-    let age = Math.max(0, Math.floor(r() * SHELF[component] * 0.95) - (r() < 0.04 ? 2 : 0));
-    const roll = r();
-    const status: UnitStatus = roll < 0.74 ? "Available" : roll < 0.86 ? "Reserved" : roll < 0.95 ? "Issued" : roll < 0.98 ? "Discarded" : "Expired";
-    if (status === "Expired") age = SHELF[component] + 1;
-    const expiresOn = new Date(NOW + (SHELF[component] - age) * D).toISOString();
-    const collectedOn = new Date(NOW - age * D).toISOString();
-    out.push({ id: `U-${String(24000 + i)}`, group, component, collectedOn, expiresOn, status, institutionId: bank.id, institution: bank.name });
+type Row = Record<string, unknown>;
+const nowMs = () => Date.now();
+const asRecord = (value: unknown): Row | null => value && typeof value === "object" && (value as { record?: unknown }).record && typeof (value as { record: unknown }).record === "object" ? (value as { record: Row }).record : null;
+async function context() { const actor = await identity(); const db = await database(); return { actor, db, registry: new Registry(db, actor) }; }
+async function readRows(registry: Registry, path: string[]) {
+  const records: Row[] = [];
+  let after: string | undefined;
+  for (let page = 0; page < 100; page++) {
+    const result = await registry.read(path, after) as { records?: Row[]; next?: string | null };
+    records.push(...(Array.isArray(result.records) ? result.records : []));
+    if (!result.next) return records;
+    after = result.next;
   }
-  // Make a couple of groups realistically scarce so the alerts have something to say.
-  return out.filter(u => !(u.group === "AB-" && u.status === "Available" && Number(u.id.slice(2)) % 3 !== 0));
+  throw new RegistryError(503, "OPERATIONAL_DATA_LIMIT_EXCEEDED");
 }
-const units = buildUnits();
-const expiringSoon = (u: BloodUnit) => expiringSoonAt(u, NOW);
-const groupRows = (list: BloodUnit[]) => groupRowsAt(list, NOW);
-
-/* ---------- Emergencies ---------- */
-type Seed = [id: string, hospital: string, group: BloodGroup, comp: BloodComponent, units: number, urg: Urgency, status: EmergencyStatus, createdHrsAgo: number, dueInHrs: number, fulfilled: number];
-const seeds: Seed[] = [
-  ["ER-1048", "h-sahyadri", "O-", "Red cells", 4, "Critical", "Awaiting response", 0.3, 1.5, 0],
-  ["ER-1047", "h-city", "B+", "Platelets", 6, "Critical", "Processing", 0.8, 2.5, 0],
-  ["ER-1046", "h-lotus", "A+", "Red cells", 3, "High", "Partially fulfilled", 2.2, 5, 2],
-  ["ER-1045", "h-creek", "AB-", "Plasma", 2, "High", "Awaiting response", 3.1, 6, 0],
-  ["ER-1044", "h-city", "O+", "Whole blood", 2, "Normal", "Fulfilled", 5, 8, 2],
-  ["ER-1043", "h-sahyadri", "B-", "Red cells", 2, "Critical", "Partially fulfilled", 6, 1, 1],
-  ["ER-1042", "h-lotus", "O+", "Red cells", 5, "High", "Fulfilled", 9, 12, 5],
-  ["ER-1041", "h-creek", "A-", "Plasma", 1, "Normal", "Rejected", 14, 20, 0],
-  ["ER-1040", "h-city", "B+", "Red cells", 3, "Normal", "Fulfilled", 20, 24, 3],
-  ["ER-1039", "h-lotus", "AB+", "Platelets", 2, "High", "Cancelled", 26, 30, 0],
-  ["ER-1038", "h-sahyadri", "O+", "Red cells", 4, "High", "Fulfilled", 30, 34, 4],
-  ["ER-1037", "h-creek", "A+", "Whole blood", 2, "Normal", "Fulfilled", 44, 48, 2],
-];
-function buildEmergency([id, hid, group, component, qty, urgency, status, ago, due, fulfilled]: Seed): Emergency {
-  const h = inst(hid);
-  const created = at(-ago);
-  const nearby = banks.filter(b => b.status === "Active").slice(0, status === "Submitted" ? 0 : 3);
-  const responses: BankResponse[] = nearby.map((b, i) => {
-    const state: BankResponse["state"] = status === "Awaiting response" ? (i === 0 ? "Offered" : "Contacted") : status === "Processing" ? "Contacted" : status === "Rejected" ? "Declined" : status === "Cancelled" ? "Contacted" : i === 0 ? (status === "Fulfilled" ? "Dispatched" : "Reserved") : i === 1 && fulfilled > 0 && status === "Partially fulfilled" ? "Reserved" : "Declined";
-    return { institutionId: b.id, bank: b.name, state, unitsOffered: state === "Offered" || state === "Reserved" || state === "Dispatched" ? Math.max(1, i === 0 ? Math.min(qty, Math.max(fulfilled, 1)) : 1) : 0, at: new Date(Date.parse(created) + (6 + i * 9) * 60000).toISOString() };
-  });
-  const t = (min: number) => new Date(Date.parse(created) + min * 60000).toISOString();
-  const timeline: TimelineEvent[] = [{ label: "Request created", detail: `${h.name} requested ${qty} × ${group} ${component.toLowerCase()}`, at: created }];
-  if (status !== "Submitted") timeline.push({ label: "Request validated", at: t(2) });
-  if (responses.length) timeline.push({ label: "Blood banks contacted", detail: `${responses.length} banks in range`, at: t(4) });
-  if (responses.some(r => r.state === "Offered" || r.state === "Reserved" || r.state === "Dispatched")) timeline.push({ label: "Blood bank response", detail: `${responses.find(r => r.unitsOffered)?.bank} offered ${responses.find(r => r.unitsOffered)?.unitsOffered} unit(s)`, at: t(12) });
-  if (responses.some(r => r.state === "Reserved" || r.state === "Dispatched")) timeline.push({ label: "Units reserved", detail: `${Math.max(fulfilled, 1)} unit(s) held`, at: t(20) });
-  if (status === "Fulfilled") timeline.push({ label: "Dispatched and received", at: t(55) }, { label: "Request completed", at: t(70) });
-  if (status === "Rejected") timeline.push({ label: "Request rejected", detail: "No compatible stock within range", at: t(25) });
-  if (status === "Cancelled") timeline.push({ label: "Request cancelled", detail: "Cancelled by the hospital", at: t(40) });
-  return { id, hospitalId: hid, hospital: h.name, district: h.district, group, component, units: qty, unitsFulfilled: fulfilled, urgency, status, createdAt: created, deadline: at(due), responses, timeline };
+async function readOne(registry: Registry, path: string[]) { return asRecord(await registry.read(path)); }
+function institutionMap(rows: Row[], type: "Hospital" | "Blood bank") { return new Map(rows.map(row => [String(row.id), institutionFromRecord(row, type)] as const)); }
+async function scopedInstitutions(actor: Principal, registry: Registry) {
+  if (actor.role === "STATE_ADMIN") {
+    const [banks, hospitals] = await Promise.all([readRows(registry, ["state", "banks"]), readRows(registry, ["state", "hospitals"])]);
+    return [...banks.map(row => institutionFromRecord(row, "Blood bank")), ...hospitals.map(row => institutionFromRecord(row, "Hospital"))];
+  }
+  if (actor.role === "BANK") {
+    const bank = await readOne(registry, ["banks", actor.bankId]);
+    return bank ? [institutionFromRecord(bank, "Blood bank")] : [];
+  }
+  if (actor.role === "HOSPITAL") {
+    const [hospital, banks] = await Promise.all([readOne(registry, ["hospitals", actor.hospitalId]), readRows(registry, ["matching", "banks"])]);
+    return [...(hospital ? [institutionFromRecord(hospital, "Hospital")] : []), ...banks.map(row => institutionFromRecord(row, "Blood bank"))];
+  }
+  throw new RegistryError(403, "ROLE_NOT_AUTHORIZED");
 }
-const emergencies = seeds.map(buildEmergency);
-const OPEN: EmergencyStatus[] = ["Submitted", "Processing", "Awaiting response", "Partially fulfilled"];
-const isOpen = (e: Emergency) => OPEN.includes(e.status);
-
-/* ---------- Donors ---------- */
-const donorNames = ["Aarav Mehta", "Diya Nair", "Kabir Sheikh", "Isha Kulkarni", "Rohan Pawar", "Meera Reddy", "Arjun Gaikwad", "Sana Qureshi", "Vikram Chavan", "Tara D’Souza", "Nikhil Jadhav", "Pooja Naik", "Yash Thakkar", "Anika Shetty", "Imran Pathan", "Kavya Menon", "Sameer Bhatt", "Ritu Salvi"];
-const donors: Donor[] = donorNames.map((name, i) => {
-  const r = rng(100 + i);
-  const group = BLOOD_GROUPS[Math.floor(r() * r() * 8 + (i % 3 === 0 ? 2 : 0)) % 8];
-  const last = r() < 0.75 ? Math.floor(20 + r() * 300) : null;
-  const next = last === null ? null : new Date(NOW + (90 - last) * D).toISOString();
-  const sent = Math.floor(r() * 8);
-  return { id: `D-${3100 + i}`, name, group, district: ["Mumbai City", "Mumbai Suburban", "Thane", "Pune"][i % 4], available: r() < 0.62, subscribed: r() < 0.8, verified: r() < 0.85, lastDonation: last === null ? null : new Date(NOW - last * D).toISOString(), nextEligible: next, contactMasked: `+91 ••••• ${String(10000 + Math.floor(r() * 89999)).slice(1)}`, alertsSent: sent, alertsAnswered: Math.floor(sent * r()) };
-});
-
-/* ---------- Activity, actions, admin ---------- */
-const activity: Activity[] = [
-  { id: "a1", text: "Emergency ER-1048 raised for 4 × O- red cells", institution: inst("h-sahyadri").name, at: at(-0.3), tone: "critical" },
-  { id: "a2", text: "Offered 2 × B+ platelets against ER-1047", institution: inst("bb-harbour").name, at: at(-0.6), tone: "info" },
-  { id: "a3", text: "12 units added to stock", institution: inst("bb-pune").name, at: at(-1.1), tone: "ok" },
-  { id: "a4", text: "ER-1044 fulfilled", institution: inst("h-city").name, at: at(-3.4), tone: "ok" },
-  { id: "a5", text: "3 units discarded after failed screening", institution: inst("bb-thane").name, at: at(-5), tone: "warn" },
-  { id: "a6", text: "Registration submitted for verification", institution: inst("bb-eastern").name, at: at(-52), tone: "info" },
-];
-const pending: PendingAction[] = [
-  { id: "p1", action: "Respond to ER-1048 (O- red cells)", owner: "Blood banks in range", due: at(1.5), href: "/emergencies/ER-1048" },
-  { id: "p2", action: "Approve registration for Eastern Link Blood Bank", owner: "State admin", due: at(24), href: "/institutions/bb-eastern" },
-  { id: "p3", action: "Review 6 units expiring within 48 hours", owner: "Harbour City Blood Bank", due: at(48), href: "/inventory" },
-  { id: "p4", action: "Verify 3 new donor records", owner: "State admin", due: at(72), href: "/donors" },
-];
-const users: AppUser[] = [
-  { id: "u1", name: "Anita Rao", email: "anita.rao@example.org", role: "State admin", institution: "State blood programme", status: "Active", lastSignIn: at(-0.5) },
-  { id: "u2", name: "R. Kulkarni", email: "r.kulkarni@example.org", role: "Blood bank", institution: inst("bb-harbour").name, status: "Active", lastSignIn: at(-2) },
-  { id: "u3", name: "Dr. L. Bhosale", email: "l.bhosale@example.org", role: "Hospital", institution: inst("h-sahyadri").name, status: "Active", lastSignIn: at(-0.4) },
-  { id: "u4", name: "Dr. G. More", email: "g.more@example.org", role: "Hospital", institution: inst("h-rural").name, status: "Disabled", lastSignIn: at(-300) },
-  { id: "u5", name: "V. Patil", email: "v.patil@example.org", role: "Blood bank", institution: inst("bb-eastern").name, status: "Active", lastSignIn: null },
-];
-const audit: AuditEntry[] = [
-  { id: "e1", user: "Dr. L. Bhosale", action: "Created emergency request", record: "ER-1048", at: at(-0.3), result: "Success" },
-  { id: "e2", user: "R. Kulkarni", action: "Reserved 2 units", record: "ER-1046", at: at(-2.1), result: "Success" },
-  { id: "e3", user: "Anita Rao", action: "Suspended institution", record: "MH-H-1209", at: at(-240), result: "Success" },
-  { id: "e4", user: "V. Patil", action: "Viewed donor contact details", record: "D-3104", at: at(-30), result: "Denied" },
-  { id: "e5", user: "M. Shaikh", action: "Issued 1 unit", record: "U-24057", at: at(-6), result: "Success" },
-];
-
-/* ---------- Accessors (swap these for real calls) ---------- */
-const delay = <T,>(v: T) => Promise.resolve(v);
-
-export async function getNow() { return delay(NOW); }
-
-export async function getOverview() {
-  const live = units.filter(u => u.status === "Available");
-  const open = emergencies.filter(isOpen);
-  const criticalGroups = groupRows(units).filter(g => g.level !== "ok");
-  return delay({
-    now: NOW,
-    cards: { available: live.length, activeEmergencies: open.length, criticalEmergencies: open.filter(e => e.urgency === "Critical").length, institutions: institutions.filter(i => i.status === "Active").length, hospitals: hospitals.filter(i => i.status === "Active").length, banks: banks.filter(i => i.status === "Active").length, pending: pending.length },
-    recentEmergencies: emergencies.slice(0, 5),
-    alerts: criticalGroups.map(g => ({ ...g })),
-    groups: groupRows(units),
-    activity,
-    pending,
-    requestsByDay: requestsByDay(),
-  });
+async function scopedUnits(actor: Principal, registry: Registry): Promise<Row[]> {
+  if (actor.role === "STATE_ADMIN") return readRows(registry, ["state", "units"]);
+  if (actor.role === "BANK") return readRows(registry, ["banks", actor.bankId, "units"]);
+  return [];
 }
-
-export async function getInventory() { return delay({ now: NOW, units, groups: groupRows(units), totals: { available: units.filter(u => u.status === "Available").length, reserved: units.filter(u => u.status === "Reserved").length, expiringSoon: units.filter(expiringSoon).length, lowGroups: groupRows(units).filter(g => g.level !== "ok").length }, institutions: banks.map(b => ({ id: b.id, name: b.name })) }); }
-export async function getEmergencies() { const open = emergencies.filter(isOpen); return delay({ now: NOW, items: emergencies, cards: { active: open.length, critical: open.filter(e => e.urgency === "Critical").length, awaiting: emergencies.filter(e => e.status === "Awaiting response").length, inProgress: emergencies.filter(e => e.status === "Processing" || e.status === "Partially fulfilled").length, completedToday: emergencies.filter(e => e.status === "Fulfilled" && NOW - Date.parse(e.createdAt) < 24 * H).length }, hospitals: hospitals.filter(h => h.status === "Active").map(h => ({ id: h.id, name: h.name })) }); }
-export async function getEmergency(id: string) { const e = emergencies.find(x => x.id === id); return delay(e ? { now: NOW, emergency: e } : null); }
-export async function getInstitutions() { return delay({ now: NOW, items: institutions, cards: { hospitals: hospitals.length, banks: banks.length, active: institutions.filter(i => i.status === "Active").length, attention: institutions.filter(i => i.status !== "Active").length } }); }
+async function scopedAllocationRows(actor: Principal, registry: Registry, db: Awaited<ReturnType<typeof database>>): Promise<Row[]> {
+  let path: string[];
+  if (actor.role === "STATE_ADMIN") path = ["state", "allocations"];
+  else if (actor.role === "BANK") path = ["banks", actor.bankId, "allocations"];
+  else if (actor.role === "HOSPITAL") path = ["hospitals", actor.hospitalId, "allocations"];
+  else return [];
+  const visible = await readRows(registry, path);
+  const unitIds = visible.map(row => row.unitId).filter((value): value is string => typeof value === "string");
+  if (!unitIds.length) return [];
+  const filter: Document = { stateId: actor.stateId, unitId: { $in: unitIds } };
+  if (actor.role === "BANK") Object.assign(filter, { bankId: actor.bankId, bankTenantId: actor.tenantId });
+  if (actor.role === "HOSPITAL") Object.assign(filter, { hospitalId: actor.hospitalId, hospitalTenantId: actor.tenantId });
+  const rows = await db.collection("allocations").find(filter, { projection: { _id: 0, id: 1, unitId: 1, requestId: 1, bankId: 1, bankTenantId: 1, hospitalId: 1, hospitalTenantId: 1, status: 1, reservedAt: 1, updatedAt: 1, handoverAt: 1 }, maxTimeMS: 5000 }).limit(10_001).toArray();
+  if (rows.length > 10_000) throw new RegistryError(503, "OPERATIONAL_DATA_LIMIT_EXCEEDED");
+  return rows as Row[];
+}
+async function scopedRequests(actor: Principal, registry: Registry, db: Awaited<ReturnType<typeof database>>): Promise<Row[]> {
+  let filter: Document;
+  if (actor.role === "STATE_ADMIN" || actor.role === "HOSPITAL") {
+    const path = actor.role === "STATE_ADMIN" ? ["state", "requests"] : ["hospitals", actor.hospitalId, "requests"];
+    const visible = await readRows(registry, path);
+    const requestIds = visible.map(row => row.id).filter((value): value is string => typeof value === "string");
+    if (!requestIds.length) return [];
+    filter = { stateId: actor.stateId, _id: { $in: requestIds } };
+    if (actor.role === "HOSPITAL") Object.assign(filter, { tenantId: actor.tenantId, hospitalId: actor.hospitalId });
+  } else if (actor.role === "BANK") {
+    const allocations = await scopedAllocationRows(actor, registry, db);
+    const pairs = allocations.filter(row => row.status !== "RELEASED" && typeof row.requestId === "string" && typeof row.hospitalTenantId === "string" && typeof row.hospitalId === "string").map(row => ({ requestId: String(row.requestId), hospitalTenantId: String(row.hospitalTenantId), hospitalId: String(row.hospitalId) }));
+    if (!pairs.length) return [];
+    const unique = [...new Map(pairs.map(row => [`${row.requestId}|${row.hospitalTenantId}|${row.hospitalId}`, row] as const)).values()];
+    filter = { stateId: actor.stateId, $or: unique.map(row => ({ _id: row.requestId, tenantId: row.hospitalTenantId, hospitalId: row.hospitalId })) };
+  } else return [];
+  const found = await db.collection("requests").find(filter, { projection: { _id: 0, id: 1, hospitalId: 1, tenantId: 1, group: 1, component: 1, quantity: 1, allocatedQuantity: 1, transfusedQuantity: 1, urgency: 1, expectedTransfusionAt: 1, status: 1, createdAt: 1, workflow: 1 }, maxTimeMS: 5000 }).limit(10_001).toArray();
+  if (found.length > 10_000) throw new RegistryError(503, "OPERATIONAL_DATA_LIMIT_EXCEEDED");
+  return found as Row[];
+}
+async function mappedEmergencies(actor: Principal, registry: Registry, db: Awaited<ReturnType<typeof database>>) {
+  const requests = await scopedRequests(actor, registry, db);
+  if (!requests.length) return [] as Emergency[];
+  const hospitalIds = [...new Set(requests.map(row => String(row.hospitalId)))];
+  let hospitalRows: Row[];
+  if (actor.role === "STATE_ADMIN") hospitalRows = await readRows(registry, ["state", "hospitals"]);
+  else if (actor.role === "HOSPITAL") { const hospital = await readOne(registry, ["hospitals", actor.hospitalId]); hospitalRows = hospital ? [hospital] : []; }
+  else if (actor.role === "BANK") {
+    const pairs = requests.filter(row => typeof row.hospitalId === "string" && typeof row.tenantId === "string").map(row => ({ hospitalId: String(row.hospitalId), tenantId: String(row.tenantId) }));
+    const unique = [...new Map(pairs.map(row => [`${row.hospitalId}:${row.tenantId}`, row] as const)).values()];
+    hospitalRows = unique.length ? await db.collection<{ _id: string; [key: string]: unknown }>("hospitals").find({ _id: { $in: hospitalIds }, stateId: actor.stateId, $or: unique.map(row => ({ _id: row.hospitalId, tenantId: row.tenantId })) }, { projection: { _id: 0, id: 1, name: 1, district: 1 }, maxTimeMS: 5000 }).toArray() as Row[] : [];
+  } else return [];
+  const allocationRows = await scopedAllocationRows(actor, registry, db);
+  let bankRows: Row[];
+  if (actor.role === "STATE_ADMIN") bankRows = await readRows(registry, ["state", "banks"]);
+  else if (actor.role === "HOSPITAL") bankRows = await readRows(registry, ["matching", "banks"]);
+  else if (actor.role === "BANK") { const bank = await readOne(registry, ["banks", actor.bankId]); bankRows = bank ? [bank] : []; }
+  else return [];
+  const banksById = new Map(bankRows.map(row => [String(row.id), String(row.name)] as const));
+  const hospitals = institutionMap(hospitalRows, "Hospital");
+  const visibleRequestIds = new Set(requests.map(row => String(row.id)));
+  const grouped = new Map<string, Row[]>();
+  for (const allocation of allocationRows) {
+    const requestId = String(allocation.requestId ?? "");
+    const bankId = String(allocation.bankId ?? "");
+    const bankTenantId = String(allocation.bankTenantId ?? "");
+    if (!visibleRequestIds.has(requestId) || !bankId || !bankTenantId) continue;
+    const key = `${requestId}:${bankId}:${bankTenantId}`;
+    grouped.set(key, [...(grouped.get(key) ?? []), allocation]);
+  }
+  const responsesByRequest = new Map<string, BankResponse[]>();
+  for (const [key, allocations] of grouped) {
+    const [requestId, bankId] = key.split(":");
+    const statuses = allocations.map(allocation => String(allocation.status));
+    const state: BankResponse["state"] = statuses.includes("TRANSFUSED") ? "Transfused" : allocations.some(allocation => Boolean(allocation.handoverAt)) ? "Handed over" : statuses.includes("ISSUED") ? "Issued" : statuses.includes("ACTIVE") ? "Reserved" : "Released";
+    const dates = allocations.map(allocation => asIso(allocation.updatedAt) || asIso(allocation.reservedAt)).filter(Boolean).sort();
+    const response: BankResponse = { institutionId: bankId, bank: banksById.get(bankId) ?? "Blood bank record unavailable", state, unitsOffered: allocations.length, at: dates.at(-1) ?? "" };
+    responsesByRequest.set(requestId, [...(responsesByRequest.get(requestId) ?? []), response]);
+  }
+  return requests.map(row => {
+    const hospital = hospitals.get(String(row.hospitalId));
+    return emergencyFromRecord(row, hospital?.name ?? "Hospital record unavailable", hospital?.district ?? "Not recorded", responsesByRequest.get(String(row.id)) ?? []);
+  }).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+}
+async function inventoryData(actor: Principal, registry: Registry) {
+  const [rows, institutions] = await Promise.all([scopedUnits(actor, registry), scopedInstitutions(actor, registry)]);
+  const banks = new Map(institutions.filter(item => item.type === "Blood bank").map(item => [item.id, item.name] as const));
+  const units = rows.map(row => unitFromRecord(row, banks.get(String(row.bankId)) ?? "Blood bank record unavailable"));
+  const now = nowMs(), groups = groupRows(units, now);
+  return { now, units, groups, totals: { available: units.filter(unit => unit.status === "Available" && Date.parse(unit.expiresOn) > now && Date.parse(unit.collectedOn) <= now).length, reserved: units.filter(unit => unit.status === "Reserved").length, expiringSoon: units.filter(unit => expiringSoon(unit, now)).length, lowGroups: groups.filter(group => group.level !== "ok").length }, institutions: institutions.filter(item => item.type === "Blood bank").map(({ id, name }) => ({ id, name })) };
+}
+export async function getNow() { return nowMs(); }
+export async function getInventory() {
+  const { actor, registry } = await context();
+  if (actor.role === "HOSPITAL" || actor.role === "DONOR") return null;
+  return inventoryData(actor, registry);
+}
+export async function getEmergencies() {
+  const { actor, registry, db } = await context();
+  if (actor.role === "DONOR") return null;
+  const items = await mappedEmergencies(actor, registry, db);
+  const open = items.filter(item => ["Submitted", "Processing", "Awaiting response", "Partially allocated", "Allocated"].includes(item.status));
+  const now = nowMs();
+  return { now, items, canCreate: actor.role === "HOSPITAL", cards: { active: open.length, critical: open.filter(item => item.urgency === "Critical").length, awaiting: items.filter(item => item.status === "Awaiting response").length, inProgress: items.filter(item => item.status === "Processing" || item.status === "Partially allocated" || item.status === "Allocated").length, completedToday: items.filter(item => item.status === "Fulfilled" && item.completedAt !== null && now - Date.parse(item.completedAt) >= 0 && now - Date.parse(item.completedAt) < 86_400_000).length } };
+}
+export async function getEmergency(id: string) {
+  const data = await getEmergencies(); if (!data) return null;
+  const emergency = data.items.find(item => item.id === id);
+  return emergency ? { now: data.now, emergency } : null;
+}
+export async function getInstitutions() {
+  const { actor, registry } = await context();
+  if (actor.role === "DONOR") return null;
+  const items = await scopedInstitutions(actor, registry);
+  return { now: nowMs(), items, scopeNote: actor.role === "STATE_ADMIN" ? "State-wide institution directory" : actor.role === "BANK" ? "Only your own bank profile is available to this role" : "Your hospital and the matching blood banks visible to it", cards: { hospitals: actor.role === "BANK" ? "—" : items.filter(item => item.type === "Hospital").length, banks: items.filter(item => item.type === "Blood bank").length } };
+}
 export async function getInstitution(id: string) {
-  const i = institutions.find(x => x.id === id);
-  if (!i) return delay(null);
-  const stock = i.type === "Blood bank" ? units.filter(u => u.institutionId === id) : [];
-  return delay({ now: NOW, institution: i, groups: groupRows(stock), stock: { available: stock.filter(u => u.status === "Available").length, expiring: stock.filter(expiringSoon).length }, emergencies: emergencies.filter(e => e.hospitalId === id || e.responses.some(r => r.institutionId === id)), activity: activity.filter(a => a.institution === i.name) });
+  const { actor, db, registry } = await context();
+  if (actor.role === "DONOR") return null;
+  const institution = (await scopedInstitutions(actor, registry)).find(item => item.id === id);
+  if (!institution) return null;
+  const now = nowMs();
+  let stockUnits: BloodUnit[] = [], emergencies: Emergency[] = [];
+  if (institution.type === "Blood bank" && (actor.role === "STATE_ADMIN" || actor.role === "BANK")) {
+    const rows = actor.role === "STATE_ADMIN" ? await readRows(registry, ["banks", id, "units"]) : await readRows(registry, ["banks", actor.bankId, "units"]);
+    const bank = institution;
+    stockUnits = rows.map(row => unitFromRecord(row, bank.name));
+  }
+  const allVisibleEmergencies = await mappedEmergencies(actor, registry, db);
+  let relatedRequestIds = new Set<string>();
+  if (institution.type === "Blood bank" && (actor.role === "STATE_ADMIN" || actor.role === "BANK")) {
+    const allocations = await readRows(registry, ["banks", id, "allocations"]);
+    relatedRequestIds = new Set(allocations.filter(row => row.status !== "RELEASED").map(row => String(row.requestId)));
+  }
+  emergencies = allVisibleEmergencies.filter(item => item.hospitalId === id || relatedRequestIds.has(item.id));
+  const groups = groupRows(stockUnits, now);
+  return { now, institution, groups, stock: { available: stockUnits.filter(unit => unit.status === "Available" && Date.parse(unit.expiresOn) > now && Date.parse(unit.collectedOn) <= now).length, expiring: stockUnits.filter(unit => expiringSoon(unit, now)).length }, emergencies, activity: [] as Activity[], canViewInventory: institution.type === "Blood bank" && (actor.role === "STATE_ADMIN" || actor.role === "BANK") };
 }
-export async function getDonors() { return delay({ now: NOW, items: donors, cards: { registered: donors.length, available: donors.filter(d => d.available).length, subscribed: donors.filter(d => d.subscribed).length, pending: donors.filter(d => !d.verified).length } }); }
-export async function getDonor(id: string) { const d = donors.find(x => x.id === id); return delay(d ? { now: NOW, donor: d } : null); }
-
-function requestsByDay() {
-  const r = rng(5);
-  return Array.from({ length: 14 }, (_, i) => { const day = new Date(NOW - (13 - i) * D).toISOString(); return { day, Critical: Math.floor(r() * 3), High: Math.floor(1 + r() * 4), Normal: Math.floor(1 + r() * 5) }; });
+function requestsByDay(items: Emergency[], now: number, dayCount = 14) {
+  const days = Array.from({ length: dayCount }, (_, index) => {
+    const day = new Date(now - (dayCount - 1 - index) * 86_400_000); day.setUTCHours(0, 0, 0, 0);
+    return { day: day.toISOString(), Critical: 0, High: 0, Normal: 0 };
+  });
+  const dayIndex = new Map(days.map((day, index) => [day.day.slice(0, 10), index] as const));
+  for (const item of items) { const index = dayIndex.get(item.createdAt.slice(0, 10)); if (index !== undefined) days[index][item.urgency]++; }
+  return days;
+}
+export async function getOverview() {
+  const { actor, db, registry } = await context();
+  if (actor.role === "DONOR") return null;
+  const [inventory, emergencies, institutions] = await Promise.all([inventoryData(actor, registry), mappedEmergencies(actor, registry, db), scopedInstitutions(actor, registry)]);
+  const open = emergencies.filter(item => ["Submitted", "Processing", "Awaiting response", "Partially allocated", "Allocated"].includes(item.status));
+  const groups = actor.role === "HOSPITAL" ? [] : inventory.groups, alerts = actor.role === "HOSPITAL" ? [] : groups.filter(group => group.level !== "ok");
+  const pending: PendingAction[] = open.slice(0, 8).map(item => ({ id: item.id, action: `Review ${item.id} (${item.group} ${item.component.toLowerCase()})`, owner: item.hospital, due: item.deadline, href: `/emergencies/${item.id}` }));
+  const days = requestsByDay(emergencies, Date.now());
+  return { now: Date.now(), inventoryVisible: actor.role !== "HOSPITAL", canCreate: actor.role === "HOSPITAL", cards: { available: actor.role === "HOSPITAL" ? "—" : inventory.totals.available, activeEmergencies: open.length, criticalEmergencies: open.filter(item => item.urgency === "Critical").length, institutions: institutions.length, hospitals: institutions.filter(item => item.type === "Hospital").length, banks: institutions.filter(item => item.type === "Blood bank").length, pending: pending.length }, recentEmergencies: emergencies.slice(0, 5), alerts, groups, activity: [] as Activity[], pending, requestsByDay: days };
 }
 export async function getReports() {
-  const byStatus = emergencies.reduce<Record<string, number>>((m, e) => ((m[e.status] = (m[e.status] ?? 0) + 1), m), {});
-  const expiryByDay = Array.from({ length: 7 }, (_, i) => ({ day: new Date(NOW + i * D).toISOString(), count: units.filter(u => u.status === "Available" && Math.floor((Date.parse(u.expiresOn) - NOW) / D) === i).length }));
-  // Partially fulfilled requests are still active; only terminal outcomes
-  // belong in the fulfilment-rate denominator.
-  const closed = emergencies.filter(e => e.status === "Fulfilled" || e.status === "Rejected" || e.status === "Cancelled");
-  const fulfilled = emergencies.filter(e => e.status === "Fulfilled").length;
-  return delay({
-    now: NOW, groups: groupRows(units), requestsByDay: requestsByDay(), byStatus, expiryByDay,
-    cards: {
-      collected: units.length,
-      issued: units.filter(u => u.status === "Issued").length,
-      requests: emergencies.length,
-      fulfilmentRate: closed.length ? Math.round((fulfilled / closed.length) * 100) : 0,
-    },
-    movement: units.filter(u => u.status === "Issued" || u.status === "Discarded" || u.status === "Expired").slice(0, 12),
-    emergencies,
-    institutions: institutions.map(i => ({ id: i.id, name: i.name })),
-  });
+  const { actor, registry, db } = await context();
+  if (actor.role === "DONOR") return null;
+  const [inventory, emergencyItems] = await Promise.all([inventoryData(actor, registry), mappedEmergencies(actor, registry, db)]);
+  const emergency = { items: emergencyItems };
+  const byStatus = emergency.items.reduce<Record<string, number>>((result, item) => (result[item.status] = (result[item.status] ?? 0) + 1, result), {});
+  const expiryByDay = Array.from({ length: 7 }, (_, index) => ({ day: new Date(inventory.now + index * 86_400_000).toISOString(), count: inventory.units.filter(unit => unit.status === "Available" && Date.parse(unit.expiresOn) > inventory.now && Date.parse(unit.collectedOn) <= inventory.now && Math.floor((Date.parse(unit.expiresOn) - inventory.now) / 86_400_000) === index).length }));
+  const closed = emergency.items.filter(item => ["Fulfilled", "Cancelled", "Failed", "Escalated"].includes(item.status));
+  const fulfilled = closed.filter(item => item.status === "Fulfilled").length;
+  const inventoryVisible = actor.role !== "HOSPITAL";
+  const institutions = [...new Map(emergency.items.map(item => [item.hospitalId, { id: item.hospitalId, name: item.hospital }] as const)).values()];
+  return { now: inventory.now, inventoryVisible, groups: inventoryVisible ? inventory.groups : [], requestsByDay: requestsByDay(emergency.items, inventory.now, 30), byStatus, expiryByDay: inventoryVisible ? expiryByDay : [], cards: { collected: inventoryVisible ? inventory.units.length : "—", issued: inventoryVisible ? inventory.units.filter(unit => unit.status === "Issued" || unit.status === "Transfused").length : "—", requests: emergency.items.filter(item => inventory.now - Date.parse(item.createdAt) >= 0 && inventory.now - Date.parse(item.createdAt) <= 30 * 86_400_000).length, fulfilmentRate: closed.length ? Math.round(fulfilled / closed.length * 100) : 0 }, movement: inventoryVisible ? inventory.units.filter(unit => ["Issued", "Transfused", "Discarded", "Expired"].includes(unit.status)).slice(0, 12) : [], emergencies: emergency.items, institutions };
 }
-export async function getAdmin() { return delay({ now: NOW, users, audit, pendingInstitutions: institutions.filter(i => i.status === "Pending"), cards: { users: users.length, active: institutions.filter(i => i.status === "Active").length, pending: institutions.filter(i => i.status === "Pending").length } }); }
+// Donor records are exposed only as anonymous registry profiles. No phone, real name,
+// precise coordinates, session hash or private deferral reason leaves the server.
+export async function getDonors() {
+  const { actor, db, registry } = await context();
+  if (actor.role !== "STATE_ADMIN") return null;
+  const rows = await readRows(registry, ["state", "donors"]);
+  const donorIds = rows.map(row => row.id).filter((value): value is string => typeof value === "string");
+  const counts = donorIds.length ? await db.collection("alerts").aggregate<{ _id: string; sent: number; answered: number }>([
+    { $match: { stateId: actor.stateId, donorId: { $in: donorIds } } },
+    { $group: { _id: "$donorId", sent: { $sum: 1 }, answered: { $sum: { $cond: [{ $in: ["$status", ["ACCEPTED", "DECLINED"]] }, 1, 0] } } } },
+  ], { maxTimeMS: 5000 }).toArray() : [];
+  const countMap = new Map(counts.map((row: { _id: string; sent: number; answered: number }) => [row._id, row] as const));
+  const items: Donor[] = rows.map(row => {
+    const count = countMap.get(String(row.id));
+    try { return donorFromRecord(row, count ?? {}); }
+    catch { throw new RegistryError(503, "DONOR_RECORD_INVALID"); }
+  });
+  const now = nowMs();
+  return { now, items, cards: { registered: items.length, eligibleNow: items.filter(item => Date.parse(item.eligibleFrom) <= now).length, alertsEnabled: items.filter(item => item.alertsEnabled).length } };
+}
+export async function getDonor(id: string) {
+  const data = await getDonors(); if (!data) return null;
+  const donor = data.items.find(item => item.id === id);
+  return donor ? { now: data.now, donor } : null;
+}
+// Clerk owns account identity and registry role metadata; the administration page
+// reads a bounded allowlisted directory projection directly from Clerk. User-action
+// audit remains unsupported and is not inferred from unit provenance events.
+export async function getAdmin() { const { actor } = await context(); if (actor.role !== "STATE_ADMIN") return null; return { now: nowMs(), directory: await readClerkDirectory(actor.stateId) }; }

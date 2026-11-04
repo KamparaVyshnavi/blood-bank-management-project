@@ -47,7 +47,7 @@ describe('donor subscription update verification', () => {
     const findOneMock = vi.fn().mockResolvedValue({
       _id: 'audience-test-donor',
       id: 'audience-test-donor',
-      stateId: 'MH',
+      stateId: expect.any(String),
       tenantId: 'tenant-audience-test-donor',
       nickname: 'Test-Donor',
       group: 'O_POS',

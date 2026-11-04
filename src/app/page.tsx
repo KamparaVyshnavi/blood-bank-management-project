@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { PageHeader, Section } from "@/components/ds/page-header";
 import { StatGrid, SummaryCard } from "@/components/ds/summary-card";
 import { DataTable } from "@/components/ds/data-table";
@@ -12,18 +13,18 @@ export const dynamic = "force-dynamic";
 
 export default async function OverviewPage() {
   const o = await getOverview();
+  if (!o) notFound();
   return (
     <div className="ds-page">
       <PageHeader title="Overview" description="Current stock, open emergencies and what needs attention.">
-        <Link className="ds-btn ds-btn-primary" href="/emergencies?new=1">New emergency request</Link>
-        <Link className="ds-btn" href="/inventory?add=1">Add inventory</Link>
+        {o.canCreate && <Link className="ds-btn ds-btn-primary" href="/emergencies?new=1">New emergency request</Link>}
       </PageHeader>
 
       <StatGrid>
-        <SummaryCard label="Available units" value={o.cards.available} note="Usable stock across all banks" href="/inventory" />
+        <SummaryCard label="Available units" value={o.cards.available} note={o.inventoryVisible ? "Usable stock in your authorized inventory scope" : "Inventory counts are not available to hospital accounts"} href="/inventory" />
         <SummaryCard label="Active emergencies" value={o.cards.activeEmergencies} note={`${o.cards.criticalEmergencies} marked critical`} tone={o.cards.criticalEmergencies ? "critical" : "default"} href="/emergencies" />
-        <SummaryCard label="Active institutions" value={o.cards.institutions} note={`${o.cards.hospitals} hospitals, ${o.cards.banks} blood banks`} href="/institutions" />
-        <SummaryCard label="Pending actions" value={o.cards.pending} note="Waiting on a person" tone={o.cards.pending ? "warn" : "ok"} />
+        <SummaryCard label="Institutions in scope" value={o.cards.institutions} note={`${o.cards.hospitals} hospitals, ${o.cards.banks} blood banks in your authorized scope; approval status is not stored`} href="/institutions" />
+        <SummaryCard label="Open requests" value={o.cards.pending} note="Non-terminal requests in your authorized scope" tone={o.cards.pending ? "warn" : "ok"} />
       </StatGrid>
 
       <div className="ds-split">
@@ -38,7 +39,7 @@ export default async function OverviewPage() {
             ]} />
         </Section>
         <Section title="Inventory alerts" hint="Blood groups that need stock" flush>
-          <DataTable caption="Blood groups with low stock" rows={o.alerts} rowKey={g => g.group} empty="Every blood group has healthy stock."
+          <DataTable caption="Blood groups with low stock" rows={o.alerts} rowKey={g => g.group} empty={o.inventoryVisible ? "No stock alerts in the authorized inventory scope." : "Inventory details are not available to hospital accounts."}
             columns={[
               { key: "g", header: "Group", render: g => <BloodTag group={g.group} /> },
               { key: "a", header: "Available", align: "right", render: g => g.available },
@@ -67,7 +68,7 @@ export default async function OverviewPage() {
             ]} />
         </Section>
         <Section title="Recent activity" flush>
-          <ul className="ds-feed">{o.activity.map(a => <li key={a.id}><span className={`ds-feed-dot tone-${a.tone}`} aria-hidden="true" /><div><p>{a.text}</p><span>{a.institution} · {relative(a.at, o.now)}</span></div></li>)}</ul>
+          {o.activity.length ? <ul className="ds-feed">{o.activity.map(a => <li key={a.id}><span className={`ds-feed-dot tone-${a.tone}`} aria-hidden="true" /><div><p>{a.text}</p><span>{a.institution} · {relative(a.at, o.now)}</span></div></li>)}</ul> : <p className="ds-muted">No user activity log is stored in the current registry schema.</p>}
         </Section>
       </div>
     </div>

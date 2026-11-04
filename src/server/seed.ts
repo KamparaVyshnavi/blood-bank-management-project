@@ -7,6 +7,7 @@ import { COMPONENTS, GROUPS } from "../core/domain";
 import { COLLECTIONS, ensureSchema, verifyIndexes, type CollectionName } from "./schema";
 import { baseline, auditSnapshot, signUnit } from "./audit";
 import { STATE_ID } from "./registry-constants";
+import { validDatabaseName } from "./database-config";
 
 const point = (p: { latitude: number; longitude: number }) => ({ type: "Point", coordinates: [p.longitude, p.latitude] });
 const doc = (input: Document, tenantId: string): Document & { _id: string } => ({ ...input, _id: input.id, stateId: STATE_ID, tenantId });
@@ -36,7 +37,7 @@ export function seedDocuments(at: string, preset: "development" | "demo" = "deve
 
 const marker = "pulsegrid-stage5-v1";
 export function requireDemoTarget(name: string, confirmation: string | undefined) {
-  if (!/^pulsegrid_(dev|demo|test)(_[a-z0-9]+)*$/.test(name) || confirmation !== name || process.env.VERCEL_ENV === "production") throw new Error("Use a dedicated pulsegrid_dev/demo/test database and --confirm=<exact database>; production execution is disabled.");
+  if (!validDatabaseName(name) || confirmation !== name || process.env.VERCEL_ENV === "production") throw new Error("Use a valid dedicated MongoDB database and --confirm=<exact database>; seed/reset execution is disabled inside Vercel production.");
 }
 export async function upgradeSchema(db: Db, confirmation?: string) {
   requireDemoTarget(db.databaseName, confirmation);

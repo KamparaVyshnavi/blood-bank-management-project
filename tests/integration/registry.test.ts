@@ -210,8 +210,21 @@ describe("donor expiry and seed/database guarantees", () => {
     expect((await db.collection("banks").findOne({ id: "demo-bank-1" }))!.name).toBe("Synthetic Bank A");
     expect(await db.collection("_registryMeta").countDocuments({ kind: "transaction-probe" })).toBe(0);
   });
-  it.each([["production", "production"], ["pulsegrid_demo", undefined], ["pulsegrid_demo", "pulsegrid_dev"]])("blocks unsafe seed/reset target %s", (name, confirmation) => {
+  it.each([["bad.name", "bad.name"], ["pulsegrid_demo", undefined], ["pulsegrid_demo", "pulsegrid_dev"]])("blocks unsafe seed/reset target %s", (name, confirmation) => {
     expect(() => requireDemoTarget(name!, confirmation)).toThrow();
+  });
+  it("accepts a valid production-style database name only with exact confirmation outside Vercel production", () => {
+    const previous = process.env.VERCEL_ENV;
+    try {
+      vi.stubEnv("VERCEL_ENV", "preview");
+      expect(() => requireDemoTarget("bloodbank_prod", "bloodbank_prod")).not.toThrow();
+      expect(() => requireDemoTarget("bloodbank_prod", "bloodbank_preview")).toThrow();
+      vi.stubEnv("VERCEL_ENV", "production");
+      expect(() => requireDemoTarget("bloodbank_prod", "bloodbank_prod")).toThrow();
+    } finally {
+      if (previous === undefined) delete process.env.VERCEL_ENV;
+      else process.env.VERCEL_ENV = previous;
+    }
   });
   it("resets only the explicitly confirmed marked demo database", async () => {
     const report = await seedRegistry(client, db, { confirm: db.databaseName, reset: true });

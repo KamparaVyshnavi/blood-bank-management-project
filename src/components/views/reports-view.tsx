@@ -11,7 +11,7 @@ import { Icon } from "../ds/icons";
 import { fmtDate, fmtDay } from "@/lib/format";
 import { BLOOD_GROUPS, type BloodUnit, type Emergency, type GroupRow } from "@/lib/ops-types";
 
-type Data = { now: number; groups: GroupRow[]; requestsByDay: { day: string; Critical: number; High: number; Normal: number }[]; byStatus: Record<string, number>; expiryByDay: { day: string; count: number }[]; cards: { collected: number; issued: number; requests: number; fulfilmentRate: number }; movement: BloodUnit[]; emergencies: Emergency[]; institutions: { id: string; name: string }[] };
+type Data = { now: number; inventoryVisible: boolean; groups: GroupRow[]; requestsByDay: { day: string; Critical: number; High: number; Normal: number }[]; byStatus: Record<string, number>; expiryByDay: { day: string; count: number }[]; cards: { collected: number | string; issued: number | string; requests: number; fulfilmentRate: number }; movement: BloodUnit[]; emergencies: Emergency[]; institutions: { id: string; name: string }[] };
 const RANGES = ["Last 24 hours", "Last 7 days", "Last 30 days"] as const;
 const HOURS: Record<string, number> = { "Last 24 hours": 24, "Last 7 days": 168, "Last 30 days": 720 };
 
@@ -35,19 +35,19 @@ export function ReportsView({ data }: { data: Data }) {
     <div className="ds-page">
       <PageHeader title="Reports" description="What has been collected, requested and fulfilled over time." />
       <StatGrid>
-        <SummaryCard label="Units collected" value={data.cards.collected} note="In the last 30 days" />
-        <SummaryCard label="Units issued" value={data.cards.issued} note="In the last 30 days" />
-        <SummaryCard label="Emergency requests" value={data.cards.requests} note="Received in the period" />
+        <SummaryCard label="Units collected" value={data.cards.collected} note={data.inventoryVisible ? "All persisted units in the authorized inventory scope" : "Inventory access is not available to hospital accounts"} />
+        <SummaryCard label="Units issued" value={data.cards.issued} note={data.inventoryVisible ? "Currently issued or transfused units" : "Inventory access is not available to hospital accounts"} />
+        <SummaryCard label="Emergency requests" value={data.cards.requests} note="Created in the last 30 days" />
         <SummaryCard label="Fulfilment rate" value={`${data.cards.fulfilmentRate}%`} note="Fully fulfilled ÷ requests that have closed" />
       </StatGrid>
 
       <div className="ds-split ds-split-even">
-        <Section title="Current stock by blood group"><HBars label="Available units by blood group" rows={data.groups.map(g => ({ label: g.group, segments: [{ key: "Available", value: g.available }, { key: "Reserved", value: g.reserved }] }))} /></Section>
+        <Section title="Current stock by blood group">{data.inventoryVisible ? <HBars label="Available units by blood group" rows={data.groups.map(g => ({ label: g.group, segments: [{ key: "Available", value: g.available }, { key: "Reserved", value: g.reserved }] }))} /> : <p className="ds-muted">Inventory detail is not available to hospital accounts.</p>}</Section>
         <Section title="Request status"><HBars label="Emergency requests by status" rows={Object.entries(data.byStatus).map(([k, v]) => ({ label: k, segments: [{ key: "count", value: v }] }))} /></Section>
       </div>
       <div className="ds-split ds-split-even">
         <Section title="Emergency requests over time" hint="Last 14 days, by urgency"><VBars label="Emergency requests per day by urgency" keys={["Critical", "High", "Normal"]} data={data.requestsByDay.map(d => ({ label: fmtDay(d.day), segments: [{ key: "Normal", value: d.Normal }, { key: "High", value: d.High }, { key: "Critical", value: d.Critical }] }))} /></Section>
-        <Section title="Units expiring" hint="Available units by days until expiry"><VBars label="Available units expiring per day, next 7 days" keys={["count"]} data={data.expiryByDay.map(d => ({ label: fmtDay(d.day), segments: [{ key: "count", value: d.count }] }))} /></Section>
+        <Section title="Units expiring" hint="Available units by days until expiry">{data.inventoryVisible ? <VBars label="Available units expiring per day, next 7 days" keys={["count"]} data={data.expiryByDay.map(d => ({ label: fmtDay(d.day), segments: [{ key: "count", value: d.count }] }))} /> : <p className="ds-muted">Inventory detail is not available to hospital accounts.</p>}</Section>
       </div>
 
       <Section title="Emergency fulfilment" flush action={<button className="ds-btn ds-btn-small" onClick={exportCsv} disabled={rows.length === 0}><Icon name="download" size={15} />Export CSV</button>}>
@@ -64,9 +64,9 @@ export function ReportsView({ data }: { data: Data }) {
             { key: "u", header: "Fulfilled", align: "right", render: e => `${e.unitsFulfilled} / ${e.units}` }, { key: "s", header: "Status", render: e => <EmergencyStatusBadge status={e.status} /> }]} />
       </Section>
 
-      <Section title="Units issued, discarded or expired" hint="Most recent inventory movement" flush>
-        <DataTable caption="Inventory movement" rows={data.movement} rowKey={u => u.id}
-          columns={[{ key: "id", header: "Unit", render: u => <span className="ds-id">{u.id}</span> }, { key: "g", header: "Group", render: u => <BloodTag group={u.group} /> }, { key: "c", header: "Component", render: u => u.component }, { key: "s", header: "Outcome", render: u => <UnitStatusBadge status={u.status} /> }, { key: "b", header: "Blood bank", render: u => u.institution }, { key: "e", header: "Expiry date", render: u => fmtDate(u.expiresOn) }]} />
+      <Section title="Units issued, discarded or expired" hint="Current issued, transfused, discarded or expired units" flush>
+        {data.inventoryVisible ? <DataTable caption="Inventory movement" rows={data.movement} rowKey={u => u.id}
+          columns={[{ key: "id", header: "Unit", render: u => <span className="ds-id">{u.id}</span> }, { key: "g", header: "Group", render: u => <BloodTag group={u.group} /> }, { key: "c", header: "Component", render: u => u.component }, { key: "s", header: "Outcome", render: u => <UnitStatusBadge status={u.status} /> }, { key: "b", header: "Blood bank", render: u => u.institution }, { key: "e", header: "Expiry date", render: u => fmtDate(u.expiresOn) }]} /> : <p className="ds-muted">Inventory detail is not available to hospital accounts.</p>}
       </Section>
     </div>
   );

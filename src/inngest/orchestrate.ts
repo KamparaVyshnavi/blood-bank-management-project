@@ -13,8 +13,9 @@ export async function orchestrate(data: CreatedData, runId: string, eventId: str
   await step.run("persist-request", async () => (await store()).initialize(data, runId, eventId));
   await step.run("stock-search", async () => (await store()).note(data.requestId, "STOCK_SEARCH"));
   const closure = () => step.run("closure", async () => (await store()).snapshot(data.requestId));
-  // At most three steps per round, plus setup/closure: below Inngest's 1,000-step cap.
-  for (let round = 0; round < 330; round++) {
+  // Worst case per round: reconcile + reserve + donor-wave + sendEvent + wait = 5 durable steps.
+  // 190 rounds plus setup and exhaustion steps stays below Inngest's 1,000-step ceiling.
+  for (let round = 0; round < 190; round++) {
     let state = await step.run(`reconcile-replies-readiness-${round}`, async () => {
       const current = await store();
       await current.reconcile(data.requestId);

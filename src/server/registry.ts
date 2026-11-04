@@ -25,7 +25,7 @@ const projections: Record<CollectionName, Document> = {
   unitEvents: { id: 1, bankId: 1, unitId: 1, requestId: 1, allocationId: 1, at: 1, revision: 1, actorId: 1, action: 1, from: 1, to: 1 },
   requests: { id: 1, hospitalId: 1, group: 1, component: 1, quantity: 1, allocatedQuantity: 1, transfusedQuantity: 1, urgency: 1, expectedTransfusionAt: 1, status: 1, createdAt: 1 },
   allocations: { id: 1, unitId: 1, bankId: 1, hospitalId: 1, requestId: 1, status: 1, reservedAt: 1, leaseExpiresAt: 1, handoverAt: 1, releasedAt: 1, releaseReason: 1 },
-  donors: { id: 1, nickname: 1, group: 1, eligibleFrom: 1, audience: 1, expireAt: 1 },
+  donors: { id: 1, nickname: 1, group: 1, eligibleFrom: 1, lastDonationAt: 1, audience: 1, expireAt: 1 },
   stock: { id: 1, bankId: 1, group: 1, component: 1, available: 1 },
   alerts: { id: 1, donorId: 1, requestId: 1, status: 1, createdAt: 1, deadlineAt: 1, collectionBankId: 1, wave: 1, channel: 1 },
   operations: { id: 1, createdAt: 1 },

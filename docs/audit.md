@@ -107,8 +107,8 @@ versioned migration before rotation.
 For a marked dedicated development/demo database:
 
 ```powershell
-npm run registry -- upgrade --confirm=pulsegrid_dev
-npm run registry -- seed --confirm=pulsegrid_dev
+npm run registry -- upgrade --confirm=bloodbank_dev
+npm run registry -- seed --confirm=bloodbank_dev
 ```
 
 Upgrade adds `anchors`, index definitions and optional audit-field validators
@@ -221,7 +221,7 @@ local development; adapters were exercised with mock transports.
 
 ## Isolated database tamper rehearsal and trust limits
 
-Use a separate explicitly named database such as `pulsegrid_demo_audit`, never
+Use a separate explicitly named database such as `bloodbank_prod_audit`, never
 the audience/live demo registry. Configure the same app's server key and a
 separate setup user, seed it with the confirmed target, and sign in as admin.
 Verify a known seeded unit cleanly. In Atlas Data Explorer, change only that
@@ -229,7 +229,7 @@ unit's `expiresAt` (BSON Date). Reopen its Passport: chain VALID, signature
 MISMATCH, state MISMATCH. Run **Verify registry now** to retain the alarm. In a
 second independent fixture, change an event actor: its chain fails at that
 sequence while the current-unit signature can remain VALID. Reset the isolated
-database through `registry -- reset --confirm=pulsegrid_demo_audit` with workers
+database through `registry -- reset --confirm=bloodbank_prod_audit` with workers
 stopped, or restore the original trusted backup. This Atlas rehearsal is a
 documented follow-up, not a claimed cloud test.
 

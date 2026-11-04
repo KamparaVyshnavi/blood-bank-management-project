@@ -14,7 +14,7 @@ and schema setup; it does not need an audience Clerk account. Staff operations k
 their existing Clerk authorization.
 
 1. Run the guarded schema upgrade on the existing dedicated demo database:
-   `npm run registry -- upgrade --confirm=pulsegrid_dev` (substitute its exact name;
+   `npm run registry -- upgrade --confirm=bloodbank_dev` (substitute its exact name;
    see the registry CLI's usage). This adds audience session and cleanup indexes
    without resetting stock, requests, seed hashes or institution edits.
 2. Generate keys once with `npm run donor:keys -- mailto:YOUR_OPERATOR_ADDRESS` or

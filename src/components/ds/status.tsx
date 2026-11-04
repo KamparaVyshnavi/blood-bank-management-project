@@ -1,9 +1,9 @@
 import { StatusBadge, type StatusTone } from "../ui/status-badge";
 import type { EmergencyStatus, InstitutionStatus, UnitStatus, Urgency } from "@/lib/ops-types";
 
-const emergencyTone: Record<EmergencyStatus, StatusTone> = { Submitted: "info", Processing: "info", "Awaiting response": "low", "Partially fulfilled": "low", Fulfilled: "healthy", Rejected: "critical", Cancelled: "neutral" };
-const unitTone: Record<UnitStatus, StatusTone> = { Available: "healthy", Reserved: "info", Issued: "neutral", Expired: "critical", Discarded: "critical" };
-const instTone: Record<InstitutionStatus, StatusTone> = { Active: "healthy", Pending: "low", Suspended: "critical" };
+const emergencyTone: Record<EmergencyStatus, StatusTone> = { Submitted: "info", Processing: "info", "Awaiting response": "low", "Partially allocated": "low", Allocated: "info", Fulfilled: "healthy", Cancelled: "neutral", Escalated: "critical", Failed: "critical" };
+const unitTone: Record<UnitStatus, StatusTone> = { Collected: "neutral", Testing: "info", Available: "healthy", Reserved: "info", Issued: "neutral", Transfused: "neutral", Expired: "critical", Discarded: "critical", "Returned to quarantine": "low", Quarantined: "critical" };
+const instTone: Record<InstitutionStatus, StatusTone> = { "Not recorded": "neutral" };
 const urgencyTone: Record<Urgency, StatusTone> = { Critical: "critical", High: "low", Normal: "neutral" };
 
 export const EmergencyStatusBadge = ({ status }: { status: EmergencyStatus }) => <StatusBadge tone={emergencyTone[status]}>{status}</StatusBadge>;

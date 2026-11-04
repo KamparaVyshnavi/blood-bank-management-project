@@ -45,12 +45,32 @@ export const emergencyWorkflow = inngest.createFunction({
 export const emergencySignals = inngest.createFunction({
   id: "emergency-signals-v1", triggers: [donorReply, stockReady, dispatchApproved, handover, syntheticUse, cancelled, escalated], retries: 8,
   concurrency: [...workflowConcurrency], idempotency: "event.data.signalId",
-  onFailure: async ({ event, step }) => { await step.run("record-signal-failure", () => workflowFailure(event.data.event.data.requestId, "signal")); }
+  onFailure: async ({ event, step }) => {
+    const original = event.data.event.data;
+    // If Atlas recovered by the time retries are exhausted, preserve the event in
+    // the durable inbox so the existing workflow reconciler can still apply it.
+    await step.run("preserve-exhausted-signal", async () => {
+      try {
+        await workflowTrace(original.requestId, async () => (await store()).ingest(original));
+        return { persisted: true };
+      } catch (error) {
+        if (error instanceof RegistryError && error.status < 500) return { persisted: false, permanent: true };
+        throw error;
+      }
+    });
+    await step.run("record-signal-failure", () => workflowFailure(original.requestId, "signal"));
+  }
 }, async ({ event, step }) => {
-  await step.run("persist-signal", () => workflowTrace(event.data.requestId, async () => (await store()).ingest(event.data)));
-  await step.run("apply-persisted-signal", () => workflowTrace(event.data.requestId, async () => (await store()).reconcile(event.data.requestId)));
-  await step.sendEvent("wake-request", changed.create({ requestId: event.data.requestId }, { id: `${event.data.signalId}-wake` }));
-  return { requestId: event.data.requestId };
+  try {
+    await step.run("persist-signal", () => workflowTrace(event.data.requestId, async () => (await store()).ingest(event.data)));
+    await step.run("apply-persisted-signal", () => workflowTrace(event.data.requestId, async () => (await store()).reconcile(event.data.requestId)));
+    await step.sendEvent("wake-request", changed.create({ requestId: event.data.requestId }, { id: `${event.data.signalId}-wake` }));
+    return { requestId: event.data.requestId };
+  } catch (error) {
+    // Invalid or unauthorized event data is permanent; retry only transient Atlas/provider failures.
+    if (error instanceof RegistryError && error.status < 500) throw new NonRetriableError(error.code);
+    throw error;
+  }
 });
 // Provider retries are isolated from stock allocation, donor receipts and handover.
 export const donorPushWorkflow = inngest.createFunction({ id: "donor-push-v1", triggers: [donorWaveOpened], retries: 8, concurrency: [ATLAS_WORKFLOW_CONCURRENCY, { limit: 1, scope: "fn" }], idempotency: 'event.data.requestId + "-" + event.data.index' }, async ({ event, step }) => {

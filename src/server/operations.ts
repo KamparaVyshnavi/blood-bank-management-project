@@ -109,7 +109,7 @@ export class Operations {
         if (!req || released && req.allocatedQuantity <= req.transfusedQuantity) conflict("COUNTERS_INCONSISTENT");
         const allocatedQuantity = req.allocatedQuantity - (released ? 1 : 0);
         const transfusedQuantity = req.transfusedQuantity + (command.type === "TRANSFUSE" ? 1 : 0);
-        const status = transfusedQuantity === req.quantity ? "COMPLETED" : ["CANCELLED", "ESCALATED"].includes(req.status) ? req.status : allocatedQuantity === req.quantity ? "ALLOCATED" : allocatedQuantity ? "PARTIAL" : "OPEN";
+        const status = transfusedQuantity === req.quantity ? "COMPLETED" : ["CANCELLED", "ESCALATED", "FAILED"].includes(req.status) ? req.status : allocatedQuantity === req.quantity ? "ALLOCATED" : allocatedQuantity ? "PARTIAL" : "OPEN";
         const requestUpdate = await this.c("requests").updateOne(
           { _id: req._id, allocatedQuantity: req.allocatedQuantity, transfusedQuantity: req.transfusedQuantity },
           { $set: { allocatedQuantity, transfusedQuantity, status } },
@@ -146,7 +146,7 @@ export class Operations {
     const hospitalId = this.actor.hospitalId;
     return this.once("hospitals", hospitalId, `${requestId}/workflow-dispatch`, { key }, async (parent, session) => {
       const req = await this.request(parent, requestId, session);
-      if (!req.workflow || ["CANCELLED", "ESCALATED", "COMPLETED"].includes(req.status) || req.expectedTransfusionAt <= this.now) return { dispatched: false, reason: "REQUEST_CLOSED_OR_DUE" };
+      if (!req.workflow || ["CANCELLED", "ESCALATED", "COMPLETED", "FAILED"].includes(req.status) || req.expectedTransfusionAt <= this.now) return { dispatched: false, reason: "REQUEST_CLOSED_OR_DUE" };
       const slots = await this.c("allocations").find({ requestId, stateId: parent.stateId, hospitalId, hospitalTenantId: parent.tenantId, status: { $in: ["ACTIVE", "ISSUED", "TRANSFUSED"] } }, { session }).limit(21).toArray();
       if (slots.length !== req.quantity || req.allocatedQuantity !== req.quantity) return { dispatched: false, reason: "UNMET_QUANTITY" };
       const pending: Row[] = [];
@@ -171,7 +171,7 @@ export class Operations {
     return this.once("hospitals", this.actor.hospitalId, `${requestId}/workflow-close`, body, async (parent, session) => {
       const req = await this.request(parent, requestId, session);
       if (!req.workflow) conflict("WORKFLOW_REQUIRED");
-      if (["COMPLETED", "CANCELLED", "ESCALATED"].includes(req.workflow.status)) return { status: req.workflow.status };
+      if (["COMPLETED", "CANCELLED", "ESCALATED", "FAILED"].includes(req.workflow.status)) return { status: req.workflow.status };
       const rows = await this.c("units").find({ stateId: parent.stateId, "reservation.requestId": requestId, status: { $in: ["RESERVED", "ISSUED"] } }, { session }).limit(21).toArray();
       for (const row of rows.filter(u => u.status === "RESERVED")) await this.saveTransition(row, { type: "CANCEL_RESERVATION", requestId }, session);
       const review = rows.some(u => u.status === "ISSUED") || req.transfusedQuantity > 0;
@@ -238,7 +238,7 @@ export class Operations {
         const body = validate(v.object(key), input), banks = await this.banks(parent);
         return this.once(kind, resourceId, `${recordId}/reserve`, body, async (p, session) => {
           const current = await this.request(p, recordId, session);
-          if (["CANCELLED", "COMPLETED", "ESCALATED"].includes(current.status) || current.expectedTransfusionAt <= this.now) conflict("REQUEST_CLOSED_OR_DUE");
+          if (["CANCELLED", "COMPLETED", "ESCALATED", "FAILED"].includes(current.status) || current.expectedTransfusionAt <= this.now) conflict("REQUEST_CLOSED_OR_DUE");
           if (current.allocatedQuantity >= current.quantity) return { reserved: false, reason: "QUANTITY_COVERED", requestId: recordId };
           const candidates = await this.candidates(current, banks, session);
           for (const row of candidates) {

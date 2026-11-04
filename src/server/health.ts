@@ -3,7 +3,7 @@ import "server-only";
 /** Application liveness only. Does not probe or reveal provider configuration. */
 export function getScaffoldHealth() {
   return {
-    app: "pulsegrid-college-demo",
+    app: "blood-bank-management-system",
     status: "ok",
     stage: "registry-foundation",
     runtime: "nodejs",

@@ -90,7 +90,7 @@ export function donorHandler(deps: Dependencies = { database, now: () => new Dat
             );
             if (updatedAlert.modifiedCount !== 1) throw new RegistryError(409, "ALERT_RESPONSE_CONFLICT");
             state = "RECEIVED";
-          } else if (alert.status === input.reply) state = "RECEIVED";
+          } else if (active && alert.status === input.reply) state = "RECEIVED";
           const receipt = { state, reply: input.reply, requestId: alert.requestId };
           await c("operations").insertOne({ _id: opId, id: opId, stateId: STATE_ID, tenantId: own.tenantId, fingerprint, result: receipt, createdAt: now, expireAt: own.expireAt }, { session });
           return receipt;

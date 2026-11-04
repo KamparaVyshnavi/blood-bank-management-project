@@ -5,7 +5,7 @@ export type NavItem = { href: string; label: string; icon: IconName; roles: Role
 const ALL: Role[] = ["STATE_ADMIN", "BANK", "HOSPITAL"];
 export const primaryNav: NavItem[] = [
   { href: "/", label: "Overview", icon: "overview", roles: ALL },
-  { href: "/inventory", label: "Inventory", icon: "inventory", roles: ["STATE_ADMIN", "BANK", "HOSPITAL"] },
+  { href: "/inventory", label: "Inventory", icon: "inventory", roles: ["STATE_ADMIN", "BANK"] },
   { href: "/emergencies", label: "Emergencies", icon: "emergency", roles: ALL },
   { href: "/institutions", label: "Hospitals & banks", icon: "institutions", roles: ["STATE_ADMIN", "BANK", "HOSPITAL"] },
   { href: "/donors", label: "Donors", icon: "donors", roles: ["STATE_ADMIN", "BANK"] },

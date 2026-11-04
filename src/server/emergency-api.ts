@@ -15,6 +15,12 @@ const headers = { "Cache-Control": "private, no-store, max-age=0", Vary: "Cookie
 const MAX_INTAKE_BODY_BYTES = 64 * 1024;
 type Receipt = { requestId: string; tenantId: string; hospitalId: string; stateId: string; acceptedAt: string; eventIds: string[] };
 type Payload = { id: string; name: string; data: CreatedData | SignalData };
+function acknowledgedEventIds(result: unknown): string[] | undefined {
+  if (!result || typeof result !== "object" || !("ids" in result)) return;
+  const ids = (result as { ids?: unknown }).ids;
+  if (!Array.isArray(ids) || ids.length === 0 || ids.some(id => typeof id !== "string" || id.length === 0)) return;
+  return ids;
+}
 export type EmergencyDependencies = {
   identity: () => Promise<Principal>; database: () => Promise<Db>;
   send: (payload: Payload) => Promise<{ ids: string[] }>;
@@ -100,12 +106,13 @@ export function emergencyHandler(deps = defaults) {
         correlateRequest(requestId);
         const data: CreatedData = { requestId, input, actor, fingerprint: workflowDigest(input), acceptedAt: now.toISOString() };
         // No database call precedes durable acknowledgement.
-        let result;
+        let result: unknown;
         try { result = await span("workflow", "durable-intake", () => deps.send({ ...requestCreated.create(data), id: `${requestId}-created` })); }
         catch { return Response.json({ accepted: false, status: "ACKNOWLEDGEMENT_UNKNOWN", error: "WORKFLOW_UNAVAILABLE", requestId, retrySamePayload: true }, { status: 503, headers }); }
-        if (!result.ids.length || result.ids.some(id => typeof id !== "string" || !id)) throw new RegistryError(503, "WORKFLOW_ACK_MISSING");
-        const ack: Receipt = { requestId, tenantId: actor.tenantId, hospitalId: actor.hospitalId, stateId: actor.stateId, acceptedAt: data.acceptedAt, eventIds: result.ids };
-        return Response.json({ accepted: true, status: "ACKNOWLEDGED_PENDING", requestId, eventIds: result.ids, receipt: sign(ack, secret), statusUrl: `/api/emergencies/${requestId}`, dashboardUrl: dashboard() }, { status: 202, headers });
+        const eventIds = acknowledgedEventIds(result);
+        if (!eventIds) return Response.json({ accepted: false, status: "ACKNOWLEDGEMENT_UNKNOWN", error: "WORKFLOW_ACK_MISSING", requestId, retrySamePayload: true }, { status: 503, headers });
+        const ack: Receipt = { requestId, tenantId: actor.tenantId, hospitalId: actor.hospitalId, stateId: actor.stateId, acceptedAt: data.acceptedAt, eventIds };
+        return Response.json({ accepted: true, status: "ACKNOWLEDGED_PENDING", requestId, eventIds, receipt: sign(ack, secret), statusUrl: `/api/emergencies/${requestId}`, dashboardUrl: dashboard() }, { status: 202, headers });
       }
       const [requestId, kind] = path;
       if (!requestId) throw new RegistryError(404, "NOT_FOUND");
@@ -135,9 +142,12 @@ export function emergencyHandler(deps = defaults) {
         }
         const signalId = `signal-${workflowDigest([requestId, actor, signalKind, input])}`;
         const data: SignalData = { requestId, actor, kind: signalKind, input, signalId, receivedAt: now.toISOString() };
-        const result = await span("workflow", "durable-signal", () => deps.send({ ...signalTypes[signalKind].create(data), id: signalId }));
-        if (!result.ids.length) throw new RegistryError(503, "WORKFLOW_ACK_MISSING");
-        return Response.json({ accepted: true, status: "SIGNAL_ACKNOWLEDGED_PENDING", requestId, signalId, eventIds: result.ids }, { status: 202, headers });
+        let result: unknown;
+        try { result = await span("workflow", "durable-signal", () => deps.send({ ...signalTypes[signalKind].create(data), id: signalId })); }
+        catch { return Response.json({ accepted: false, status: "SIGNAL_ACKNOWLEDGEMENT_UNKNOWN", error: "WORKFLOW_UNAVAILABLE", requestId, signalId, retrySamePayload: true }, { status: 503, headers }); }
+        const eventIds = acknowledgedEventIds(result);
+        if (!eventIds) return Response.json({ accepted: false, status: "SIGNAL_ACKNOWLEDGEMENT_UNKNOWN", error: "WORKFLOW_ACK_MISSING", requestId, signalId, retrySamePayload: true }, { status: 503, headers });
+        return Response.json({ accepted: true, status: "SIGNAL_ACKNOWLEDGED_PENDING", requestId, signalId, eventIds }, { status: 202, headers });
       }
       throw new RegistryError(404, "NOT_FOUND");
     } catch (error) {

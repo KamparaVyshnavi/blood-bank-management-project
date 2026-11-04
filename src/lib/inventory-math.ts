@@ -15,7 +15,7 @@ export function expiringSoon(u: BloodUnit, now: number) {
 export function groupRows(list: BloodUnit[], now: number): GroupRow[] {
   return BLOOD_GROUPS.map(group => {
     const g = list.filter(u => u.group === group);
-    const available = g.filter(u => u.status === "Available").length;
+    const available = g.filter(u => u.status === "Available" && Date.parse(u.expiresOn) > now && Date.parse(u.collectedOn) <= now).length;
     return { group, available, reserved: g.filter(u => u.status === "Reserved").length, expiringSoon: g.filter(u => expiringSoon(u, now)).length, level: available < CRITICAL_BELOW ? "critical" : available < LOW_BELOW ? "low" : "ok" };
   });
 }
