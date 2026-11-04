@@ -52,6 +52,18 @@ export function AdminView({ data }: { data: Data }) {
     setToggle(null);
   }
 
+  function verifyInstitution(inst: Institution) {
+    const stamp = new Date(now).toISOString();
+    setData(prev => ({
+      ...prev,
+      institutions: prev.institutions.map(i => i.id === inst.id ? { ...i, status: "Active", lastActivity: stamp } : i),
+      audit: [
+        { id: `aud-${Date.now()}`, user: "Anita Rao", action: "Verified institution", record: inst.name, at: stamp, result: "Success" },
+        ...prev.audit,
+      ],
+    }));
+  }
+
   return (
     <div className="ds-page">
       <PageHeader title="Administration" description="Users, institution approvals, the audit log and system health.">
@@ -80,7 +92,7 @@ export function AdminView({ data }: { data: Data }) {
       <div className="ds-split ds-split-even">
         <Section title="Institution approvals" flush>
           <DataTable caption="Institutions awaiting approval" rows={pendingInstitutions} rowKey={i => i.id} empty="No institutions are waiting for approval."
-            columns={[{ key: "n", header: "Institution", render: i => i.name }, { key: "t", header: "Type", render: i => i.type }, { key: "a", header: "Review", render: i => <Link className="ds-link" href={`/institutions/${i.id}`}>Open</Link> }]} />
+            columns={[{ key: "n", header: "Institution", render: i => i.name }, { key: "t", header: "Type", render: i => i.type }, { key: "a", header: "Review", render: i => <span style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}><Link className="ds-link" href={`/institutions/${i.id}`}>Open</Link><button className="ds-btn ds-btn-small" onClick={() => verifyInstitution(i)}>Verify</button></span> }]} />
         </Section>
         <Section title="System health" hint="Live result from /api/health">
           <ul className="ds-services">{svc.map(([name, state]) => <li key={name}><span>{name}</span><StatusBadge tone={name === "Application" ? health.tone : "neutral"}>{name === "Application" ? state : state === "not-probed" || !state ? "Not checked" : state}</StatusBadge></li>)}</ul>
