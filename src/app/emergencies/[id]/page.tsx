@@ -1,12 +1,15 @@
-import { notFound } from "next/navigation";
-import { getEmergency } from "@/lib/ops-data";
+import { getEmergency, getNow } from "@/lib/ops-data";
 import { EmergencyDetail } from "@/components/views/emergency-detail";
 
 export const dynamic = "force-dynamic";
-export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) { return { title: `Emergency ${(await params).id}` }; }
+export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  return { title: `Emergency ${id}` };
+}
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
-  const data = await getEmergency((await params).id);
-  if (!data) notFound();
-  return <EmergencyDetail emergency={data.emergency} now={data.now} />;
+  const { id } = await params;
+  const data = await getEmergency(id);
+  const now = data?.now ?? (await getNow());
+  return <EmergencyDetail id={id} emergency={data?.emergency} now={now} />;
 }

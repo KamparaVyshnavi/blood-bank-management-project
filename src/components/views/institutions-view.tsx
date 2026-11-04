@@ -6,10 +6,21 @@ import { StatGrid, SummaryCard } from "../ds/summary-card";
 import { DataTable } from "../ds/data-table";
 import { InstitutionStatusBadge } from "../ds/status";
 import { FilterBar, SearchBox, SelectFilter } from "../ds/filter-bar";
+import { useDemoData } from "@/components/providers/demo-data-provider";
 import { relative } from "@/lib/format";
 import type { Institution } from "@/lib/ops-types";
 
-export function InstitutionsView({ items, cards, now }: { items: Institution[]; cards: { hospitals: number; banks: number; active: number; attention: number }; now: number }) {
+export function InstitutionsView({ now }: { items?: Institution[]; cards?: { hospitals: number; banks: number; active: number; attention: number }; now: number }) {
+  const { data } = useDemoData();
+  const items = data.institutions;
+
+  const cards = {
+    hospitals: items.filter(i => i.type === "Hospital").length,
+    banks: items.filter(i => i.type === "Blood bank").length,
+    active: items.filter(i => i.status === "Active").length,
+    attention: items.filter(i => i.status !== "Active").length,
+  };
+
   const [q, setQ] = useState(""); const [type, setType] = useState("ALL"); const [status, setStatus] = useState("ALL");
   const rows = useMemo(() => items.filter(i => (!q || `${i.name} ${i.regId} ${i.district}`.toLowerCase().includes(q.toLowerCase())) && (type === "ALL" || i.type === type) && (status === "ALL" || i.status === status)), [items, q, type, status]);
   return (

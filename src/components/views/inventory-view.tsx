@@ -120,6 +120,8 @@ export function InventoryView({
     if (!pending) return;
 
     const unitId = pending.unit.id;
+    const bankName = pending.unit.institution;
+    const stamp = new Date(now).toISOString();
 
     const next =
       pending.kind === "reserve"
@@ -128,11 +130,39 @@ export function InventoryView({
           ? "Issued"
           : "Available";
 
+    const actionDesc =
+      pending.kind === "reserve"
+        ? "Reserved 1 unit"
+        : pending.kind === "issue"
+          ? "Issued 1 unit"
+          : "Released 1 unit";
+
     setData((previous) => ({
       ...previous,
       units: previous.units.map((unit) =>
         unit.id === unitId ? { ...unit, status: next } : unit
       ),
+      activity: [
+        {
+          id: `a-${Date.now()}`,
+          text: `Unit ${unitId} (${pending.unit.group} ${pending.unit.component}) marked as ${next.toLowerCase()}`,
+          institution: bankName,
+          at: stamp,
+          tone: next === "Available" ? "ok" : next === "Reserved" ? "info" : "warn",
+        },
+        ...previous.activity,
+      ],
+      audit: [
+        {
+          id: `e-${Date.now()}`,
+          user: "M. Shaikh",
+          action: actionDesc,
+          record: unitId,
+          at: stamp,
+          result: "Success",
+        },
+        ...previous.audit,
+      ],
     }));
 
     setToast(`${unitId} is now ${next.toLowerCase()}.`);
@@ -156,7 +186,13 @@ export function InventoryView({
       Date.parse(collected) + shelf[component] * 86400000
     ).toISOString();
 
-    const id = `U-${24000 + units.length + 1}`;
+    const maxId = units.reduce((max, u) => {
+      const n = parseInt(u.id.replace(/\D/g, ""), 10);
+      return isNaN(n) ? max : Math.max(max, n);
+    }, 24230);
+    const id = `U-${maxId + 1}`;
+    const bankName = institutions.find((b) => b.id === bankId)?.name ?? "";
+    const stamp = new Date(now).toISOString();
 
     const newUnit: BloodUnit = {
       id,
@@ -166,13 +202,33 @@ export function InventoryView({
       expiresOn: expires,
       status: "Available",
       institutionId: bankId,
-      institution:
-        institutions.find((b) => b.id === bankId)?.name ?? "",
+      institution: bankName,
     };
 
     setData((previous) => ({
       ...previous,
       units: [newUnit, ...previous.units],
+      activity: [
+        {
+          id: `a-${Date.now()}`,
+          text: `1 unit (${newUnit.group} ${newUnit.component}) added to stock`,
+          institution: bankName,
+          at: stamp,
+          tone: "ok",
+        },
+        ...previous.activity,
+      ],
+      audit: [
+        {
+          id: `e-${Date.now()}`,
+          user: "M. Shaikh",
+          action: "Added unit to stock",
+          record: id,
+          at: stamp,
+          result: "Success",
+        },
+        ...previous.audit,
+      ],
     }));
 
     setToast(`${id} added to stock.`);

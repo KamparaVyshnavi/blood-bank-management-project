@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { PageHeader, Section } from "../ds/page-header";
 import { DataTable } from "../ds/data-table";
@@ -8,19 +8,108 @@ import { BloodTag, EmergencyStatusBadge, InstitutionStatusBadge, LevelBadge, Urg
 import { ConfirmDialog } from "../ds/confirm-dialog";
 import { PlaceholderNote } from "../ds/placeholder-note";
 import { relative } from "@/lib/format";
+import { groupRows, expiringSoon } from "@/lib/inventory-math";
+import { useDemoData } from "@/components/providers/demo-data-provider";
 import type { Activity, Emergency, GroupRow, Institution } from "@/lib/ops-types";
 
 const TABS = ["Overview", "Inventory", "Emergencies", "Activity"] as const;
 type Tab = (typeof TABS)[number];
 type Act = "verify" | "suspend" | "reactivate" | null;
 
-export function InstitutionDetail({ institution, groups, stock, emergencies, activity, now }: { institution: Institution; groups: GroupRow[]; stock: { available: number; expiring: number }; emergencies: Emergency[]; activity: Activity[]; now: number }) {
-  const [i, setI] = useState(institution);
+export function InstitutionDetail({
+  id,
+  institution: initialInstitution,
+  now = 0,
+}: {
+  id?: string;
+  institution?: Institution;
+  groups?: GroupRow[];
+  stock?: { available: number; expiring: number };
+  emergencies?: Emergency[];
+  activity?: Activity[];
+  now?: number;
+}) {
+  const { data, setData, hydrated } = useDemoData();
   const [tab, setTab] = useState<Tab>("Overview");
   const [act, setAct] = useState<Act>(null);
-  const isBank = i.type === "Blood bank";
+
+  const instId = id || initialInstitution?.id;
+  const i = data.institutions.find(x => x.id === instId) ?? initialInstitution;
+
+  const isBank = i?.type === "Blood bank";
   const tabs = TABS.filter(t => t !== "Inventory" || isBank);
-  const run = () => setI(x => ({ ...x, status: act === "suspend" ? "Suspended" : "Active" }));
+
+  const stockUnits = useMemo(() => {
+    if (!i || i.type !== "Blood bank") return [];
+    return data.units.filter(u => u.institutionId === i.id);
+  }, [data.units, i]);
+
+  const groups = useMemo(() => groupRows(stockUnits, now), [stockUnits, now]);
+  const stock = useMemo(() => ({
+    available: stockUnits.filter(u => u.status === "Available").length,
+    expiring: stockUnits.filter(u => expiringSoon(u, now)).length,
+  }), [stockUnits, now]);
+
+  const emergencies = useMemo(() => {
+    if (!i) return [];
+    return data.emergencies.filter(e => e.hospitalId === i.id || e.responses.some(r => r.institutionId === i.id));
+  }, [data.emergencies, i]);
+
+  const activity = useMemo(() => {
+    if (!i) return [];
+    return data.activity.filter(a => a.institution === i.name);
+  }, [data.activity, i]);
+
+  if (!i) {
+    if (!hydrated) {
+      return (
+        <div className="ds-page">
+          <PageHeader title="Institution" description="Loading institution details..." back={{ href: "/institutions", label: "All institutions" }} />
+          <PlaceholderNote />
+        </div>
+      );
+    }
+    return (
+      <div className="ds-page">
+        <PageHeader title="Institution not found" description={`Institution ${instId ?? ""} could not be found.`} back={{ href: "/institutions", label: "All institutions" }} />
+      </div>
+    );
+  }
+
+  function run() {
+    if (!act || !i) return;
+    const nextStatus = act === "suspend" ? "Suspended" : "Active";
+    const stamp = new Date(now).toISOString();
+
+    setData(prev => ({
+      ...prev,
+      institutions: prev.institutions.map(inst =>
+        inst.id === i.id ? { ...inst, status: nextStatus, lastActivity: stamp } : inst
+      ),
+      activity: [
+        {
+          id: `a-${Date.now()}`,
+          text: `${i.name} registration updated to ${nextStatus.toLowerCase()}`,
+          institution: i.name,
+          at: stamp,
+          tone: nextStatus === "Active" ? "ok" : "warn",
+        },
+        ...prev.activity,
+      ],
+      audit: [
+        {
+          id: `e-${Date.now()}`,
+          user: "Anita Rao",
+          action: `${nextStatus === "Suspended" ? "Suspended" : "Verified"} institution`,
+          record: i.regId,
+          at: stamp,
+          result: "Success",
+        },
+        ...prev.audit,
+      ],
+    }));
+    setAct(null);
+  }
   const copy = { verify: ["Verify this registration?", `${i.name} will become active and can send and receive requests.`, "Verify and activate"], suspend: ["Suspend this institution?", `${i.name} will no longer be able to send or respond to requests until it is reactivated.`, "Suspend institution"], reactivate: ["Reactivate this institution?", `${i.name} will be able to send and respond to requests again.`, "Reactivate"] } as const;
   const c = act ? copy[act] : null;
 

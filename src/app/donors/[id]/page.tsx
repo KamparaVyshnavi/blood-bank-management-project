@@ -1,12 +1,15 @@
-import { notFound } from "next/navigation";
-import { getDonor } from "@/lib/ops-data";
+import { getDonor, getNow } from "@/lib/ops-data";
 import { DonorDetail } from "@/components/views/donor-detail";
 
 export const dynamic = "force-dynamic";
-export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) { return { title: `Donor ${(await params).id}` }; }
+export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  return { title: `Donor ${id}` };
+}
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
-  const d = await getDonor((await params).id);
-  if (!d) notFound();
-  return <DonorDetail donor={d.donor} now={d.now} />;
+  const { id } = await params;
+  const d = await getDonor(id);
+  const now = d?.now ?? (await getNow());
+  return <DonorDetail id={id} donor={d?.donor} now={now} />;
 }

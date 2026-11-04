@@ -6,19 +6,85 @@ import { BloodTag } from "../ds/status";
 import { StatusBadge } from "../ui/status-badge";
 import { ConfirmDialog } from "../ds/confirm-dialog";
 import { PlaceholderNote } from "../ds/placeholder-note";
+import { useDemoData } from "@/components/providers/demo-data-provider";
 import { fmtDate } from "@/lib/format";
 import type { Donor } from "@/lib/ops-types";
 
-export function DonorDetail({ donor, now }: { donor: Donor; now: number }) {
-  const [d, setD] = useState(donor);
+export function DonorDetail({
+  id,
+  donor: initialDonor,
+  now = 0,
+}: {
+  id?: string;
+  donor?: Donor;
+  now?: number;
+}) {
+  const { data, setData, hydrated } = useDemoData();
   const [verify, setVerify] = useState(false);
+
+  const donorId = id || initialDonor?.id;
+  const d = data.donors.find(x => x.id === donorId) ?? initialDonor;
+
+  if (!d) {
+    if (!hydrated) {
+      return (
+        <div className="ds-page">
+          <PageHeader title="Donor" description="Loading donor details..." back={{ href: "/donors", label: "All donors" }} />
+          <PlaceholderNote />
+        </div>
+      );
+    }
+    return (
+      <div className="ds-page">
+        <PageHeader title="Donor not found" description={`Donor record ${donorId ?? ""} could not be found.`} back={{ href: "/donors", label: "All donors" }} />
+      </div>
+    );
+  }
+
   const eligibleNow = d.nextEligible === null || Date.parse(d.nextEligible) <= now;
+
+  function toggleAvailability() {
+    if (!d) return;
+    setData(prev => ({
+      ...prev,
+      donors: prev.donors.map(x => (x.id === d.id ? { ...x, available: !x.available } : x)),
+    }));
+  }
+
+  function toggleSubscription() {
+    if (!d) return;
+    setData(prev => ({
+      ...prev,
+      donors: prev.donors.map(x => (x.id === d.id ? { ...x, subscribed: !x.subscribed } : x)),
+    }));
+  }
+
+  function verifyDonor() {
+    if (!d) return;
+    setData(prev => ({
+      ...prev,
+      donors: prev.donors.map(x => (x.id === d.id ? { ...x, verified: true } : x)),
+      audit: [
+        {
+          id: `e-${Date.now()}`,
+          user: "Anita Rao",
+          action: "Verified donor record",
+          record: d.id,
+          at: new Date(now).toISOString(),
+          result: "Success",
+        },
+        ...prev.audit,
+      ],
+    }));
+    setVerify(false);
+  }
+
   return (
     <div className="ds-page">
       <PageHeader title={d.name} description={`Donor ${d.id} · ${d.district}`} back={{ href: "/donors", label: "All donors" }}>
         {!d.verified && <button className="ds-btn ds-btn-primary" onClick={() => setVerify(true)}>Verify record</button>}
-        <button className="ds-btn" onClick={() => setD(x => ({ ...x, available: !x.available }))}>{d.available ? "Mark unavailable" : "Mark available"}</button>
-        <button className="ds-btn" onClick={() => setD(x => ({ ...x, subscribed: !x.subscribed }))}>{d.subscribed ? "Turn off alerts" : "Turn on alerts"}</button>
+        <button className="ds-btn" onClick={toggleAvailability}>{d.available ? "Mark unavailable" : "Mark available"}</button>
+        <button className="ds-btn" onClick={toggleSubscription}>{d.subscribed ? "Turn off alerts" : "Turn on alerts"}</button>
       </PageHeader>
       <PlaceholderNote />
       <div className="ds-split ds-split-even">
@@ -39,7 +105,7 @@ export function DonorDetail({ donor, now }: { donor: Donor; now: number }) {
         <dt>Alerts sent</dt><dd>{d.alertsSent}</dd>
         <dt>Alerts answered</dt><dd>{d.alertsAnswered}</dd>
       </dl></Section>
-      <ConfirmDialog open={verify} title="Verify this donor record?" message={`${d.name}’s details will be marked as checked. They can then be included in emergency alerts.`} confirmLabel="Verify record" onConfirm={() => setD(x => ({ ...x, verified: true }))} onClose={() => setVerify(false)} />
+      <ConfirmDialog open={verify} title="Verify this donor record?" message={`${d.name}’s details will be marked as checked. They can then be included in emergency alerts.`} confirmLabel="Verify record" onConfirm={verifyDonor} onClose={() => setVerify(false)} />
     </div>
   );
 }

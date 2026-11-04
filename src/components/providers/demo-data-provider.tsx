@@ -5,12 +5,15 @@ import {
   useContext,
   useEffect,
   useState,
+  useSyncExternalStore,
   type Dispatch,
   type ReactNode,
   type SetStateAction,
 } from "react";
 
 import { getDemoDataSeed } from "@/lib/ops-data";
+
+const emptySubscribe = () => () => {};
 
 // Infer the data structure directly from your existing seed function.
 type DemoData = ReturnType<typeof getDemoDataSeed>;
@@ -19,6 +22,7 @@ type DemoDataContextType = {
   data: DemoData;
   setData: Dispatch<SetStateAction<DemoData>>;
   resetDemoData: () => void;
+  hydrated: boolean;
 };
 
 const STORAGE_KEY = "pulsegrid-demo-data-v1";
@@ -48,30 +52,31 @@ function isDemoData(value: unknown): value is DemoData {
 }
 
 export function DemoDataProvider({ children }: { children: ReactNode }) {
-  const [data, setData] = useState<DemoData>(() => getDemoDataSeed());
-  const [hydrated, setHydrated] = useState(false);
+  const [data, setData] = useState<DemoData>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const savedData = localStorage.getItem(STORAGE_KEY);
 
-  // Load previously saved data when the application starts.
-  useEffect(() => {
-    try {
-      const savedData = localStorage.getItem(STORAGE_KEY);
+        if (savedData) {
+          const parsed: unknown = JSON.parse(savedData);
 
-      if (savedData) {
-        const parsed: unknown = JSON.parse(savedData);
-
-        if (isDemoData(parsed)) {
-          setData(parsed);
-        } else {
+          if (isDemoData(parsed)) {
+            return parsed;
+          }
           localStorage.removeItem(STORAGE_KEY);
         }
+      } catch {
+        localStorage.removeItem(STORAGE_KEY);
       }
-    } catch {
-      // Ignore invalid or inaccessible saved data.
-      localStorage.removeItem(STORAGE_KEY);
-    } finally {
-      setHydrated(true);
     }
-  }, []);
+    return getDemoDataSeed();
+  });
+
+  const hydrated = useSyncExternalStore(
+    emptySubscribe,
+    () => true,
+    () => false
+  );
 
   // Save changes only after the initial browser data has loaded.
   useEffect(() => {
@@ -90,7 +95,7 @@ export function DemoDataProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <DemoDataContext.Provider value={{ data, setData, resetDemoData }}>
+    <DemoDataContext.Provider value={{ data, setData, resetDemoData, hydrated }}>
       {children}
     </DemoDataContext.Provider>
   );

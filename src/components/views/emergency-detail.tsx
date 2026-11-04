@@ -9,23 +9,130 @@ import { ConfirmDialog } from "../ds/confirm-dialog";
 import { ActivityTimeline } from "../ds/timeline";
 import { PlaceholderNote } from "../ds/placeholder-note";
 import { fmtDateTime, relative } from "@/lib/format";
+import { useDemoData } from "@/components/providers/demo-data-provider";
 import type { BankResponse, Emergency } from "@/lib/ops-types";
 
 const OPEN = ["Submitted", "Processing", "Awaiting response", "Partially fulfilled"];
 const respTone = { Contacted: "neutral", Offered: "info", Reserved: "info", Dispatched: "healthy", Declined: "critical" } as const;
 type Action = "escalate" | "cancel" | "accept" | null;
 
-export function EmergencyDetail({ emergency, now }: { emergency: Emergency; now: number }) {
-  const [e, setE] = useState(emergency);
+export function EmergencyDetail({
+  id,
+  emergency: initialEmergency,
+  now = 0,
+}: {
+  id?: string;
+  emergency?: Emergency;
+  now?: number;
+}) {
+  const { data, setData, hydrated } = useDemoData();
   const [action, setAction] = useState<Action>(null);
+
+  const emergencyId = id || initialEmergency?.id;
+  const e = data.emergencies.find(x => x.id === emergencyId) ?? initialEmergency;
+  const stamp = new Date(now || 0).toISOString();
+
+  if (!e) {
+    if (!hydrated) {
+      return (
+        <div className="ds-page">
+          <PageHeader title="Emergency" description="Loading request details..." back={{ href: "/emergencies", label: "All emergencies" }} />
+          <PlaceholderNote />
+        </div>
+      );
+    }
+    return (
+      <div className="ds-page">
+        <PageHeader title="Emergency not found" description={`Request ${emergencyId ?? ""} could not be found.`} back={{ href: "/emergencies", label: "All emergencies" }} />
+      </div>
+    );
+  }
+
   const open = OPEN.includes(e.status);
   const offer = e.responses.find(r => r.state === "Offered");
-  const stamp = new Date(now).toISOString();
 
   function run() {
-    if (action === "cancel") setE(x => ({ ...x, status: "Cancelled", timeline: [...x.timeline, { label: "Request cancelled", detail: "Cancelled from this screen", at: stamp }] }));
-    if (action === "escalate") setE(x => ({ ...x, urgency: "Critical", timeline: [...x.timeline, { label: "Request escalated", detail: "Urgency raised to critical", at: stamp }] }));
-    if (action === "accept" && offer) setE(x => ({ ...x, status: "Partially fulfilled", unitsFulfilled: Math.min(x.units, x.unitsFulfilled + offer.unitsOffered), responses: x.responses.map(r => (r === offer ? { ...r, state: "Reserved" as const } : r)), timeline: [...x.timeline, { label: "Allocation accepted", detail: `${offer.unitsOffered} unit(s) from ${offer.bank}`, at: stamp }] }));
+    if (!e) return;
+    if (action === "cancel") {
+      const updatedTimeline = [
+        ...e.timeline,
+        { label: "Request cancelled", detail: "Cancelled from this screen", at: stamp },
+      ];
+      setData(prev => ({
+        ...prev,
+        emergencies: prev.emergencies.map(item =>
+          item.id === e.id ? { ...item, status: "Cancelled", timeline: updatedTimeline } : item
+        ),
+        activity: [
+          { id: `a-${Date.now()}`, text: `Request ${e.id} cancelled`, institution: e.hospital, at: stamp, tone: "warn" },
+          ...prev.activity,
+        ],
+        audit: [
+          { id: `e-${Date.now()}`, user: "Dr. L. Bhosale", action: "Cancelled emergency request", record: e.id, at: stamp, result: "Success" },
+          ...prev.audit,
+        ],
+      }));
+    }
+
+    if (action === "escalate") {
+      const updatedTimeline = [
+        ...e.timeline,
+        { label: "Request escalated", detail: "Urgency raised to critical", at: stamp },
+      ];
+      setData(prev => ({
+        ...prev,
+        emergencies: prev.emergencies.map(item =>
+          item.id === e.id ? { ...item, urgency: "Critical", timeline: updatedTimeline } : item
+        ),
+        activity: [
+          { id: `a-${Date.now()}`, text: `Emergency ${e.id} escalated to critical`, institution: e.hospital, at: stamp, tone: "critical" },
+          ...prev.activity,
+        ],
+        audit: [
+          { id: `e-${Date.now()}`, user: "Dr. L. Bhosale", action: "Escalated emergency request", record: e.id, at: stamp, result: "Success" },
+          ...prev.audit,
+        ],
+      }));
+    }
+
+    if (action === "accept" && offer) {
+      const newFulfilled = Math.min(e.units, e.unitsFulfilled + offer.unitsOffered);
+      const newStatus = newFulfilled >= e.units ? ("Fulfilled" as const) : ("Partially fulfilled" as const);
+      const updatedTimeline = [
+        ...e.timeline,
+        { label: "Allocation accepted", detail: `${offer.unitsOffered} unit(s) from ${offer.bank}`, at: stamp },
+      ];
+      if (newStatus === "Fulfilled") {
+        updatedTimeline.push({ label: "Request completed", at: stamp });
+      }
+
+      const updatedResponses = e.responses.map(r =>
+        r === offer ? { ...r, state: "Reserved" as const } : r
+      );
+
+      setData(prev => ({
+        ...prev,
+        emergencies: prev.emergencies.map(item =>
+          item.id === e.id
+            ? {
+                ...item,
+                status: newStatus,
+                unitsFulfilled: newFulfilled,
+                responses: updatedResponses,
+                timeline: updatedTimeline,
+              }
+            : item
+        ),
+        activity: [
+          { id: `a-${Date.now()}`, text: `Reserved ${offer.unitsOffered} units for ${e.id}`, institution: offer.bank, at: stamp, tone: "ok" },
+          ...prev.activity,
+        ],
+        audit: [
+          { id: `e-${Date.now()}`, user: "R. Kulkarni", action: `Reserved ${offer.unitsOffered} units`, record: e.id, at: stamp, result: "Success" },
+          ...prev.audit,
+        ],
+      }));
+    }
   }
   const copy = { cancel: ["Cancel this request?", "Blood banks will be told the request is no longer needed and any held units will be released.", "Cancel request", true], escalate: ["Escalate to critical?", "Blood banks in range will be alerted again with critical priority.", "Escalate request", false], accept: ["Accept this allocation?", `${offer?.unitsOffered ?? 0} unit(s) from ${offer?.bank ?? ""} will be reserved for this request.`, "Accept allocation", false] } as const;
   const c = action ? copy[action] : null;

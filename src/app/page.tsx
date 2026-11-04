@@ -1,6 +1,7 @@
 
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useDemoData } from "@/components/providers/demo-data-provider";
 import { PageHeader, Section } from "@/components/ds/page-header";
@@ -18,7 +19,7 @@ import { groupRows } from "@/lib/inventory-math";
 
 export default function OverviewPage() {
   const { data } = useDemoData();
-  const now = Date.now();
+  const [now] = useState(() => Date.now());
 
   const units = data.units;
   const emergencies = data.emergencies;
