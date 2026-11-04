@@ -54,6 +54,23 @@ describe("audience session and disclosure boundary", () => {
     expect((await call("register")).status).toBe(405);
     expect((await call("register", { junk: "x".repeat(9000) })).status).toBe(413);
   });
+  it("does not expose or count an alert whose request and institution tenant links do not match", async () => {
+    await join();
+    const alert = await wave();
+    expect(alert).toMatchObject({ requestTenantId: "hospital-tenant", hospitalId: "hospital-1", collectionBankTenantId: "bank-tenant" });
+    await c("alerts").updateOne({ _id: alert.id }, { $set: { status: "ACCEPTED", requestTenantId: "other-hospital-tenant", hospitalId: "other-hospital", collectionBankTenantId: "other-bank-tenant" } });
+
+    const me = await call("me");
+    expect(me.status).toBe(200);
+    expect((await me.json()).alerts).toEqual([]);
+    const reply = await call("reply", { key: "wrong-request-tenant", alertId: alert.id, reply: "ACCEPTED" });
+    expect(reply.status).toBe(200);
+    expect(await reply.json()).toMatchObject({ state: "TOO_LATE" });
+    expect((await new WorkflowStore(db, now).snapshot("request-1")).acceptedDonors).toBe(0);
+    const status = emergencyHandler({ identity: async () => ({ userId: "hospital-user", role: "HOSPITAL", stateId: STATE_ID, tenantId: "hospital-tenant", hospitalId: "hospital-1" }), database: async () => db, now: () => now, configured: () => {}, secret: () => "test-secret", send: async () => ({ ids: [] }), log: () => {} });
+    const response = await status(new Request("https://pulsegrid.test/api/emergencies/request-1"), ["request-1"]);
+    expect(await response.json()).toMatchObject({ acceptedDonors: 0, declinedDonors: 0 });
+  });
   it("blocks an unknown cookie, another session's alerts and the exact expiry boundary before TTL deletion", async () => {
     await join(); const first = { cookie, donorId }, alert = await wave();
     await join(); expect((await call("reply", { key: "foreign", alertId: alert.id, reply: "ACCEPTED" })).status).toBe(403);

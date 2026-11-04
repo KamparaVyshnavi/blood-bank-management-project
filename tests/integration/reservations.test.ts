@@ -165,6 +165,29 @@ describe("matching and lifecycle safety gates", () => {
     try { await unit("far-unit", { bankId: "far", tenantId: "tenant-far" }); const id = await request(); expect((await reserve(id)).body.reserved).toBe(false); }
     finally { await c("banks").deleteOne({ _id: "far" }); }
   });
+  it("cancels only allocations owned by the requesting hospital when request IDs collide", async () => {
+    await unit("own-reservation");
+    const id = await request();
+    expect((await reserve(id)).body.reserved).toBe(true);
+
+    const foreign = baseline({
+      _id: "foreign-reservation", id: "foreign-reservation", stateId: STATE_ID,
+      tenantId: "tenant-bank-2", bankId: "bank-2", donorId: "donor-1", group: "O-",
+      component: "PRBC", product: "PRBC_SAGM", collectedAt: new Date(start.getTime() - 86_400_000),
+      expiresAt: new Date(start.getTime() + 86_400_000), status: "RESERVED",
+      screening: { HIV: "NON_REACTIVE", HEPATITIS_B: "NON_REACTIVE", HEPATITIS_C: "NON_REACTIVE", SYPHILIS: "NON_REACTIVE", MALARIA: "NON_REACTIVE" },
+      storage: "VERIFIED", reservation: { requestId: id, allocationId: "foreign-allocation", recipientGroup: "O-", expectedTransfusionAt: new Date(start.getTime() + 3_600_000).toISOString(), reservedAt: start.toISOString(), leaseExpiresAt: new Date(start.getTime() + 600_000).toISOString() },
+    }, start);
+    await c("units").insertOne(foreign.unit);
+    await c("unitEvents").insertOne(foreign.event);
+    await c("allocations").insertOne({ _id: "foreign-slot", id: "foreign-allocation", stateId: STATE_ID, tenantId: "tenant-bank-2", bankTenantId: "tenant-bank-2", hospitalTenantId: "tenant-hospital-2", bankId: "bank-2", hospitalId: "hospital-2", unitId: "foreign-reservation", requestId: id, status: "ACTIVE", reservedAt: start, leaseExpiresAt: new Date(start.getTime() + 600_000) });
+
+    const cancelled = await post(`${base()}/${id}/cancel`, { key: "tenant-safe-cancel" });
+    expect(cancelled.status).toBe(200);
+    expect(cancelled.body).toMatchObject({ status: "CANCELLED", released: 1 });
+    expect((await c("units").findOne({ _id: "foreign-reservation" }))!.status).toBe("RESERVED");
+    expect((await c("allocations").findOne({ _id: "foreign-slot" }))!.status).toBe("ACTIVE");
+  });
   it("refuses an inconsistent occupied allocation slot and tries the next candidate", async () => {
     await unit("a-occupied"); await unit("b-good");
     await c("allocations").insertOne({ _id: "occupied", id: "occupied", unitId: "a-occupied", requestId: "unknown", stateId: STATE_ID, tenantId: "tenant-bank-1", bankTenantId: "tenant-bank-1", hospitalTenantId: "tenant-hospital-2", bankId: "bank-1", hospitalId: "hospital-2", status: "ACTIVE", reservedAt: now });

@@ -40,9 +40,9 @@ describe('donor subscription update verification', () => {
     process.env = originalEnv;
   });
 
-  it('returns 409 when updateOne reports no modification', async () => {
-    // Mock updateOne to return modifiedCount: 0
-    const updateOneMock = vi.fn().mockResolvedValue({ modifiedCount: 0 });
+  it('accepts a matched no-op update instead of treating modifiedCount zero as failure', async () => {
+    // A matched update may legitimately leave the document unchanged.
+    const updateOneMock = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 0 });
     // Mock findOne to return a valid donor for the session token
     const findOneMock = vi.fn().mockResolvedValue({
       _id: 'audience-test-donor',
@@ -88,8 +88,16 @@ describe('donor subscription update verification', () => {
     const request = mockRequest('POST', body, VALID_TOKEN);
     const handler = donorHandler(deps);
     const response = await handler(request, ['subscription']);
-    expect(response.status).toBe(409);
-    const json = await response.json();
-    expect(json.error).toBe('DONOR_SUBSCRIPTION_UPDATE_FAILED');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ state: 'SUBSCRIBED' });
+    expect(updateOneMock).toHaveBeenCalledWith(expect.objectContaining({
+      _id: 'audience-test-donor',
+      sessionHash: expect.any(String),
+      audience: true,
+      stateId: expect.any(String),
+      tenantId: 'tenant-audience-test-donor',
+      expireAt: expect.objectContaining({ $gt: expect.any(Date) }),
+      optedOut: { $ne: true },
+    }), expect.any(Object));
   });
 });

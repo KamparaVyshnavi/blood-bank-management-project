@@ -72,3 +72,30 @@ it("real SDK retries an unavailable HTTP workflow ingress without issuing a fals
     healthy = true; const restored = await submit(), ack = await restored.json(); expect(restored.status).toBe(202); expect(ack.accepted).toBe(true); expect(ack.requestId).toBe(failed.requestId);
   } finally { ingress.closeAllConnections(); await new Promise<void>(resolve => ingress.close(() => resolve())); }
 });
+
+it("enforces same-origin JSON intake and bounded JSON parsing", async () => {
+  const hospitalId = "bounded-intake-hospital";
+  const now = new Date("2026-11-01T10:00:00.000Z");
+  const send = vi.fn(async () => ({ ids: ["accepted-event"] }));
+  const handler = emergencyHandler({
+    identity: async () => ({ userId: "intake-user", role: "HOSPITAL", hospitalId, tenantId: "tenant", stateId: "maharashtra-pilot" }),
+    database: async (): Promise<Db> => { throw new Error("intake must not access Atlas before acknowledgement"); },
+    send,
+    configured: () => {},
+    secret: () => "synthetic-stable-secret-at-least-32-characters",
+    now: () => now,
+    log: () => {},
+  });
+  const body = { key: "bounded-intake-key", group: "O-", component: "PRBC", quantity: 1, urgency: "CRITICAL", expectedTransfusionAt: "2026-11-01T11:00:00.000Z" };
+  const submit = (headers: Record<string, string>, payload = JSON.stringify(body)) => handler(new Request("https://app.test/api/emergencies", { method: "POST", headers, body: payload }));
+  const validHeaders = { origin: "https://app.test", "content-type": "application/json" };
+
+  expect((await submit({ origin: "https://evil.test", "content-type": "application/json" })).status).toBe(403);
+  expect((await submit({ origin: "https://app.test", "content-type": "text/plain" })).status).toBe(415);
+  expect((await submit(validHeaders, "{")).status).toBe(400);
+  expect((await submit(validHeaders, " ".repeat(64 * 1024 + 1))).status).toBe(413);
+
+  const accepted = await submit(validHeaders);
+  expect(accepted.status).toBe(202);
+  expect(send).toHaveBeenCalledOnce();
+});

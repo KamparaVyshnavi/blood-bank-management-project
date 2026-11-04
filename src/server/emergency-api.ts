@@ -12,6 +12,7 @@ import { readJsonInput } from "./registry-api";
 import { span, traced, correlateRequest } from "./telemetry";
 
 const headers = { "Cache-Control": "private, no-store, max-age=0", Vary: "Cookie, Authorization", "X-Content-Type-Options": "nosniff" };
+const MAX_INTAKE_BODY_BYTES = 64 * 1024;
 type Receipt = { requestId: string; tenantId: string; hospitalId: string; stateId: string; acceptedAt: string; eventIds: string[] };
 type Payload = { id: string; name: string; data: CreatedData | SignalData };
 export type EmergencyDependencies = {
@@ -57,50 +58,45 @@ export function emergencyHandler(deps = defaults) {
       if (path.length) { validate(workflowId, path[0]); correlateRequest(path[0]); }
       if (request.method === "POST" && path.length === 0) {
         if (actor.role !== "HOSPITAL") deny();
-        // ---- New security helpers ----
-        const MAX_BODY_BYTES = 64 * 1024; // 64 KB request limit
         async function readLimitedJson(req: Request) {
+          const origin = req.headers.get("origin");
+          if (origin !== new URL(req.url).origin || req.headers.get("sec-fetch-site") === "cross-site") {
+            throw new RegistryError(403, "ORIGIN_DENIED");
+          }
+          if (req.headers.get("content-type")?.split(";")[0].trim() !== "application/json") {
+            throw new RegistryError(415, "JSON_REQUIRED");
+          }
           const contentLength = req.headers.get("content-length");
-          if (contentLength && Number(contentLength) > MAX_BODY_BYTES) {
-            throw new RegistryError(413, "PAYLOAD_TOO_LARGE");
+          if (contentLength !== null) {
+            const declaredLength = Number(contentLength);
+            if (!Number.isSafeInteger(declaredLength) || declaredLength < 0) throw new RegistryError(400, "INVALID_INPUT");
+            if (declaredLength > MAX_INTAKE_BODY_BYTES) throw new RegistryError(413, "PAYLOAD_TOO_LARGE");
           }
-          const raw = await req.clone().arrayBuffer();
-          if (raw.byteLength > MAX_BODY_BYTES) {
-            throw new RegistryError(413, "PAYLOAD_TOO_LARGE");
+          const reader = req.body?.getReader();
+          if (!reader) throw new RegistryError(400, "INVALID_INPUT");
+          const chunks: Uint8Array[] = [];
+          let size = 0;
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            size += value.byteLength;
+            if (size > MAX_INTAKE_BODY_BYTES) {
+              await reader.cancel().catch(() => undefined);
+              throw new RegistryError(413, "PAYLOAD_TOO_LARGE");
+            }
+            chunks.push(value);
           }
-          return JSON.parse(Buffer.from(raw).toString("utf8"));
+          try { return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown; }
+          catch { throw new RegistryError(400, "INVALID_INPUT"); }
         }
-        // Simple token‑bucket rate limiter (per hospitalId).
-        const RATE_LIMIT = { limit: 5, perMs: 60_000 }; // 5 requests per minute
-        const rateBuckets = new Map<string, { tokens: number; last: number }>();
-        function checkRateLimit(actorId: string) {
-          const now = Date.now();
-          const bucket = rateBuckets.get(actorId) ?? { tokens: RATE_LIMIT.limit, last: now };
-          const elapsed = now - bucket.last;
-          const refill = Math.floor(elapsed / RATE_LIMIT.perMs) * RATE_LIMIT.limit;
-          bucket.tokens = Math.min(RATE_LIMIT.limit, bucket.tokens + refill);
-          bucket.last = now;
-          if (bucket.tokens <= 0) {
-            throw new RegistryError(429, "RATE_LIMIT_EXCEEDED");
-          }
-          bucket.tokens -= 1;
-          rateBuckets.set(actorId, bucket);
-        }
-        // ---- End of new helpers ----
-        // Apply per‑hospital rate limiting
-        checkRateLimit(actor.hospitalId);
-        // Read and validate request body with size limit
         const rawBody = await readLimitedJson(request);
         const input = validate(emergencyInput, rawBody);
-        // Compute deterministic requestId and ensure it's not a duplicate
         const duration = Date.parse(input.expectedTransfusionAt) - now.getTime();
         if (duration <= 0 || duration > 86_400_000) throw new RegistryError(400, "DEADLINE_OUT_OF_RANGE");
+        // Derive the stable request ID without touching Atlas. The event ID
+        // and workflow's idempotent persistence protect retries.
         deps.configured(); const secret = deps.secret();
         const requestId = `emergency-${workflowDigest([actor.stateId, actor.tenantId, actor.hospitalId, input]).slice(0, 48)}`;
-        // Duplicate detection: reject if a request with this ID already exists for the state
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const existing = await (await deps.database()).collection("requests").findOne({ _id: { $eq: requestId } as any, stateId: actor.stateId });
-        if (existing) throw new RegistryError(409, "DUPLICATE_EMERGENCY");
         correlateRequest(requestId);
         const data: CreatedData = { requestId, input, actor, fingerprint: workflowDigest(input), acceptedAt: now.toISOString() };
         // No database call precedes durable acknowledgement.
@@ -124,7 +120,7 @@ export function emergencyHandler(deps = defaults) {
         if (actor.role !== "STATE_ADMIN" && (actor.role !== "HOSPITAL" || actor.hospitalId !== req.hospitalId || actor.tenantId !== req.tenantId)) deny();
         if (actor.role === "HOSPITAL" && !await store.c("hospitals").findOne({ _id: actor.hospitalId, tenantId: actor.tenantId, stateId: actor.stateId })) deny("MEMBERSHIP_REQUIRED");
         const allocations = await store.c("allocations").find({ requestId, hospitalId: req.hospitalId, hospitalTenantId: req.tenantId, stateId: req.stateId, status: { $ne: "RELEASED" } }, { projection: { _id: 0, id: 1, unitId: 1, bankId: 1, status: 1, handoverAt: 1, dispatchApproved: 1 } }).limit(20).toArray();
-        const replies = await store.c("alerts").aggregate<{ _id: string; count: number }>([{ $match: { requestId, stateId: actor.stateId } }, { $group: { _id: "$status", count: { $sum: 1 } } }]).toArray();
+        const replies = await store.c("alerts").aggregate<{ _id: string; count: number }>([{ $match: { requestId, stateId: req.stateId, requestTenantId: req.tenantId, hospitalId: req.hospitalId } }, { $group: { _id: "$status", count: { $sum: 1 } } }]).toArray();
         const count = (status: string) => replies.find(r => r._id === status)?.count ?? 0;
         return Response.json({ accepted: true, requestId, status: req.workflow.status, requestStatus: req.status, quantity: req.quantity, allocatedQuantity: req.allocatedQuantity, transfusedQuantity: req.transfusedQuantity, acceptedDonors: count("ACCEPTED"), declinedDonors: count("DECLINED"), expectedTransfusionAt: req.expectedTransfusionAt, workflow: req.workflow, allocations, dashboardUrl: dashboard() }, { headers });
       }

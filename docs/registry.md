@@ -68,9 +68,9 @@ Create/configure a Clerk application and its allowed origins/redirects. Use sepa
 | Donor | `{"role":"DONOR","stateId":"maharashtra-pilot","tenantId":"tenant-demo-donor-1","donorId":"demo-donor-1"}` |
 | Audience donor | `{"role":"DONOR","stateId":"maharashtra-pilot","tenantId":"tenant-audience-donor-1","donorId":"audience-donor-1"}` |
 
-Every request verifies a Clerk session, fetches the current backend user (to avoid stale metadata claims after revocation), strictly validates the role-specific shape, and checks the referenced institution/donor and its tenant in Atlas. No organization ID, client header, `unsafeMetadata`, role dropdown or submitted tenant ID grants access. The backend user lookup consumes Clerk API quota and fails closed on outage/rate limit. There is no development login bypass. Unknown metadata fields or a different state fail closed. The currently supported state is the fixed four-district `maharashtra-pilot`.
+Every request verifies a Clerk session, fetches the current backend user (to avoid stale metadata claims after revocation), strictly validates the role-specific shape, and checks the referenced institution/donor and its tenant in Atlas. No organization ID, client header, `unsafeMetadata`, role dropdown or submitted tenant ID grants access. The backend user lookup consumes Clerk API quota and fails closed on outage/rate limit. There is no development login bypass. Unknown metadata fields or a different state fail closed. The currently supported state is the fixed four-district `maharashtra-pilot`. The sidebar reads only the Clerk `publicMetadata.registry.role` label to display role-appropriate links; it is presentation only. API authorization continues to use the fresh server-side identity and live MongoDB membership check, so a hidden or manually opened page does not grant access. While Clerk is loading or the role is missing/unknown, privileged links remain hidden.
 
-Open the corresponding `/bank`, `/hospital`, `/donor` or `/registry` portal. These show protected registry reads and synthetic display-name mutation. Bank and Hospital also expose the [Stage 6 inventory/request/handover workflows](reservations.md). A portal for a different role shows a denied state and links to the other portals. Account changes discard fetched tenant state. Audience registration and responses remain Stage 9.
+Open the corresponding `/bank`, `/hospital`, `/donor` or `/registry` portal. These show protected registry reads and synthetic display-name mutation. Bank and Hospital also expose the [Stage 6 inventory/request/handover workflows](reservations.md). A portal for a different role shows a denied state and links to the other portals. Account changes discard fetched tenant state. Audience registration and responses remain Stage 9. Donor audience subscription writes revalidate the exact cookie hash, audience flag, state, tenant and expiry in the update predicate; workflow donor replies additionally bind alert reads and writes to the donor tenant.
 
 ## Protected API and data-access contract
 
@@ -94,6 +94,21 @@ Child collection paths optionally end with `/:id` for a single record. Lists ret
 PATCH requires JSON, at most 8 KiB, an exact same-origin `Origin` header, a valid name of at most 80 characters, and no extra fields. Browser `fetch` supplies `Origin`; CLI clients must supply it explicitly. Mongo operators/ownership/role fields are rejected. Sensitive responses (including denials) use `Cache-Control: private, no-store, max-age=0` and vary on Cookie/Authorization. No provider error text or connection string reaches the response. Authorization failures use 401/403 and structured denial logs with only actor ID, role, correlation ID, fixed code and status. Missing configuration/dependency failure returns 503. No raw submitted URL, query or body is logged.
 
 No record existence is disclosed across tenants: an inaccessible ID and a nonexistent ID both return 403. Collections and foreign keys are application-enforced; the database credential must remain server-only. Matching across the state is an explicit separate method, never an unscoped unit/donor query by a hospital.
+
+## Authentication and authorization coverage outside the registry API
+
+| Route family | Access boundary |
+|---|---|
+| `/api/emergencies/*` | Fresh Clerk identity; hospital-only intake/signals where applicable; state admin may inspect state workflows; hospital status reads are restricted to the matching hospital and tenant; signed intake receipts do not replace authentication |
+| `/api/audit/*` | State admin for audit-wide verification/status; bank may inspect only its own unit passport after live bank membership verification |
+| `/api/resilience/*` | State admin only |
+| `/api/intelligence/intake` | Hospital only, with the hospital record rechecked in MongoDB |
+| `/api/intelligence/ops` | State admin only |
+| `/api/donor/*` | Short-lived opaque bearer cookie stored as a hash in MongoDB; subscription, reply, opt-out and deletion recheck the exact session and donor tenant on writes |
+| `/api/inngest` | Inngest SDK signature verification; not a browser-session endpoint |
+| `/api/public-board`, `/api/health`, `/api/refresh-hints` | Intentionally public, privacy-preserving aggregate/liveness/boolean-hint responses only; no private records or credentials |
+
+The donor workflow-signal path binds donor alert authorization, reconciliation updates and replay checks to the donor's tenant as well as donor ID, request ID and state. Workflow-signal scans and status transitions are also state/request scoped. A tenant mismatch is denied rather than treated as a valid donor response.
 
 ## Collections, dates, indexes and active ownership
 

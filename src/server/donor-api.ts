@@ -49,9 +49,9 @@ export function donorHandler(deps: Dependencies = { database, now: () => new Dat
         const alerts = await c("alerts").find({ donorId: own.id, tenantId: own.tenantId, stateId: STATE_ID }).sort({ createdAt: -1 }).limit(20).toArray();
         const views = [];
         for (const alert of alerts) {
-          const req = await c("requests").findOne({ _id: alert.requestId, stateId: STATE_ID });
+          const req = await c("requests").findOne({ _id: alert.requestId, stateId: STATE_ID, tenantId: alert.requestTenantId, hospitalId: alert.hospitalId });
           if (!req) continue;
-          const bank = await c("banks").findOne({ _id: alert.collectionBankId, stateId: STATE_ID });
+          const bank = await c("banks").findOne({ _id: alert.collectionBankId, stateId: STATE_ID, tenantId: alert.collectionBankTenantId });
           const closed = !["OPEN", "PARTIAL"].includes(req.status) || req.allocatedQuantity >= req.quantity || req.expectedTransfusionAt <= now || alert.deadlineAt <= now || own.optedOut;
           views.push({ id: alert.id, requestId: req.id, group: req.group, component: req.component, quantity: req.quantity, status: alert.status === "PENDING" && closed ? "TOO_LATE" : alert.status, deadlineAt: alert.deadlineAt.toISOString(), collection: bank?.name ?? "Demo collection bank" });
         }
@@ -62,20 +62,33 @@ export function donorHandler(deps: Dependencies = { database, now: () => new Dat
         if (!/^[A-Za-z0-9_-]{1,128}$/.test(input.key) || !/^[A-Za-z0-9_-]{1,128}$/.test(input.alertId)) throw new RegistryError(400, "INVALID_INPUT");
         const opId = `donor-reply-${workflowDigest([own.id, input.key])}`, fingerprint = workflowDigest(input);
         const result = await new WorkflowStore(db, now).transaction(async session => {
-          const prior = await c("operations").findOne({ _id: opId }, { session });
+          const prior = await c("operations").findOne({ _id: opId, stateId: STATE_ID, tenantId: own.tenantId }, { session });
           if (prior) { if (prior.fingerprint !== fingerprint) throw new RegistryError(409, "IDEMPOTENCY_KEY_REUSED"); return prior.result; }
-          const donor = await c("donors").findOne({ _id: own.id, sessionHash: hash(token), expireAt: { $gt: now } }, { session });
+          const donor = await c("donors").findOne({ _id: own.id, sessionHash: hash(token), audience: true, stateId: STATE_ID, tenantId: own.tenantId, expireAt: { $gt: now } }, { session });
           if (!donor) throw new RegistryError(401, "DONOR_SESSION_EXPIRED");
           const alert = await c("alerts").findOne({ _id: input.alertId, donorId: own.id, tenantId: own.tenantId, stateId: STATE_ID }, { session });
           if (!alert) throw new RegistryError(403, "WAVE_MEMBERSHIP_REQUIRED");
-          const req = await c("requests").findOne({ _id: alert.requestId, stateId: STATE_ID }, { session });
+          const req = await c("requests").findOne({ _id: alert.requestId, stateId: STATE_ID, tenantId: alert.requestTenantId, hospitalId: alert.hospitalId }, { session });
           const active = req && ["OPEN", "PARTIAL"].includes(req.status) && req.allocatedQuantity < req.quantity && req.expectedTransfusionAt > now && req.workflow?.waves?.some((w: { index: number }) => w.index === alert.wave);
           let state = "TOO_LATE";
           if (!donor.optedOut && donorEligibility(donorModel(donor), now.toISOString()).eligible && active && alert.deadlineAt > now && alert.status === "PENDING") {
-            await c("donors").updateOne({ _id: own.id }, { $inc: { responseRevision: 1 } }, { session });
+            const donorRevision = await c("donors").updateOne(
+              { _id: own.id, sessionHash: hash(token), audience: true, stateId: STATE_ID, tenantId: own.tenantId, expireAt: { $gt: now }, optedOut: { $ne: true } },
+              { $inc: { responseRevision: 1 } }, { session },
+            );
+            if (donorRevision.matchedCount !== 1) throw new RegistryError(401, "DONOR_SESSION_EXPIRED");
             // Contends with allocation/cancellation so closure wins on transaction retry.
-            await c("requests").updateOne({ _id: req!._id }, { $inc: { donorResponseRevision: 1 } }, { session });
-            await c("alerts").updateOne({ _id: alert.id, status: "PENDING" }, { $set: { status: input.reply, repliedAt: now } }, { session });
+            const requestRevision = await c("requests").updateOne(
+              { _id: req!._id, stateId: STATE_ID, tenantId: alert.requestTenantId, hospitalId: alert.hospitalId, status: { $in: ["OPEN", "PARTIAL"] }, $expr: { $lt: ["$allocatedQuantity", "$quantity"] } },
+              { $inc: { donorResponseRevision: 1 } }, { session },
+            );
+            if (requestRevision.matchedCount !== 1) throw new RegistryError(409, "ALERT_RESPONSE_CONFLICT");
+            const updatedAlert = await c("alerts").updateOne(
+              { _id: alert.id, donorId: own.id, tenantId: own.tenantId, stateId: STATE_ID, requestTenantId: alert.requestTenantId, hospitalId: alert.hospitalId, status: "PENDING", deadlineAt: { $gt: now } },
+              { $set: { status: input.reply, repliedAt: now } },
+              { session },
+            );
+            if (updatedAlert.modifiedCount !== 1) throw new RegistryError(409, "ALERT_RESPONSE_CONFLICT");
             state = "RECEIVED";
           } else if (alert.status === input.reply) state = "RECEIVED";
           const receipt = { state, reply: input.reply, requestId: alert.requestId };
@@ -90,20 +103,32 @@ export function donorHandler(deps: Dependencies = { database, now: () => new Dat
         if (own.optedOut) throw new RegistryError(409, "DONOR_OPTED_OUT");
         if (!pushPublicKey()) throw new RegistryError(503, "PUSH_NOT_CONFIGURED");
         const subscription = subscriptionInput(body);
-        const updateResult = await c("donors").updateOne({ _id: own.id, expireAt: { $gt: now }, optedOut: { $ne: true } }, { $set: { pushSubscription: encryptSubscription(subscription, own.id), pushState: "ON" } });
-        if (!updateResult.modifiedCount) {
-          throw new RegistryError(409, "DONOR_SUBSCRIPTION_UPDATE_FAILED");
+        const updateResult = await c("donors").updateOne({ _id: own.id, sessionHash: hash(token), audience: true, stateId: STATE_ID, tenantId: own.tenantId, expireAt: { $gt: now }, optedOut: { $ne: true } }, { $set: { pushSubscription: encryptSubscription(subscription, own.id), pushState: "ON" } });
+        // modifiedCount can be zero when MongoDB accepts a no-op update. The
+        // authorization/race check is whether the donor row still matched.
+        if (!updateResult.matchedCount) {
+          throw new RegistryError(401, "DONOR_SESSION_EXPIRED");
         }
         return ok({ state: "SUBSCRIBED" });
       }
       if (route === "opt-out") {
-        await c("donors").updateOne({ _id: own.id }, { $set: { optedOut: true, pushState: "OFF" }, $unset: { pushSubscription: "" } });
+        const result = await c("donors").updateOne(
+          { _id: own.id, sessionHash: hash(token), audience: true, stateId: STATE_ID, tenantId: own.tenantId, expireAt: { $gt: now } },
+          { $set: { optedOut: true, pushState: "OFF" }, $unset: { pushSubscription: "" } },
+        );
+        if (!result.matchedCount) throw new RegistryError(401, "DONOR_SESSION_EXPIRED");
         return ok({ state: "OPTED_OUT" });
       }
       await new WorkflowStore(db, now).transaction(async session => {
-        await c("donors").deleteOne({ _id: own.id }, { session });
-        await c("alerts").deleteMany({ donorId: own.id }, { session });
-        await c("operations").deleteMany({ tenantId: own.tenantId }, { session });
+        // Revalidate the bearer session inside the transaction. The initial
+        // lookup is only a routing aid and may become stale before deletion.
+        const deleted = await c("donors").deleteOne(
+          { _id: own.id, sessionHash: hash(token), audience: true, stateId: STATE_ID, tenantId: own.tenantId, expireAt: { $gt: now } },
+          { session },
+        );
+        if (deleted.deletedCount !== 1) throw new RegistryError(401, "DONOR_SESSION_EXPIRED");
+        await c("alerts").deleteMany({ donorId: own.id, tenantId: own.tenantId, stateId: STATE_ID }, { session });
+        await c("operations").deleteMany({ tenantId: own.tenantId, stateId: STATE_ID }, { session });
       });
       return ok({ state: "DELETED" }, { "Set-Cookie": cookie("", 0) });
     } catch (error) {

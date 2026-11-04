@@ -196,12 +196,30 @@ describe("real transaction workflow paths with injected durable waits", () => {
 });
 
 describe("idempotency, correlation and readiness gates", () => {
+  it("rejects donor replies when the alert tenant does not match the authenticated donor", async () => {
+    const d = await init(); await store().wave(d.requestId, 0);
+    await c("alerts").updateOne({ requestId: d.requestId, donorId: "donor-1" }, { $set: { tenantId: "tenant-other-donor" } });
+    await expect(store().authorizeSignal(await store().request(d.requestId), donor, "donor.reply", { key: "foreign-alert", donorId: "donor-1", reply: "ACCEPTED" })).rejects.toMatchObject({ status: 403, code: "WAVE_MEMBERSHIP_REQUIRED" });
+  });
+
   it("duplicates initialization, notification waves and responses without duplicate records", async () => {
     const d = data(); await Promise.all(Array.from({ length: 5 }, () => store().initialize(d, "run", "event")));
     await store().wave(d.requestId, 0); await store().wave(d.requestId, 0);
     const response = await signal(d.requestId, "donor.reply", { key: "reply", donorId: "donor-1", reply: "ACCEPTED" }, donor);
     await store().ingest(response); await store().reconcile(d.requestId); await store().reconcile(d.requestId);
     expect(await c("requests").countDocuments()).toBe(1); expect(await c("alerts").countDocuments()).toBe(1); expect(await c("workflowSignals").countDocuments()).toBe(1);
+  });
+  it("recovers a donor-reply signal after the alert update committed but signal acknowledgement did not", async () => {
+    const d = await init(); await store().wave(d.requestId, 0);
+    const alert = await c("alerts").findOne({ requestId: d.requestId, donorId: "donor-1" });
+    expect(alert).toBeTruthy();
+    const response = await signal(d.requestId, "donor.reply", { key: "reply-recovery", donorId: "donor-1", reply: "ACCEPTED" }, donor);
+    await store().ingest(response);
+    // Simulate a worker crash after its alert write but before marking the signal.
+    await c("alerts").updateOne({ _id: alert!._id }, { $set: { status: "ACCEPTED", repliedAt: now } });
+    await store().reconcile(d.requestId);
+    expect((await c("workflowSignals").findOne({ _id: response.signalId }))?.status).toBe("APPLIED");
+    expect((await c("alerts").findOne({ _id: alert!._id }))?.status).toBe("ACCEPTED");
   });
   it("enforces alert cooldown across different requests", async () => {
     const a = await init(), b = await init(data({ key: "second" })); await store().wave(a.requestId, 0); await store().wave(b.requestId, 0);

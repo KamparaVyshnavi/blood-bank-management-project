@@ -46,15 +46,16 @@ type Send = (subscription: PushSubscription, payload: string, options: webpush.R
 export async function deliverDonorPush(db: Db, requestId: string, now = new Date(), send: Send = webpush.sendNotification) {
   if (!pushPublicKey()) return;
   const c = (name: string) => db.collection<WorkflowRow>(name);
-  const alerts = await c("alerts").find({ requestId, stateId: STATE_ID, status: "PENDING", deadlineAt: { $gt: now }, pushStatus: { $nin: ["SENT", "EXPIRED", "FAILED"] } }).limit(100).toArray();
+  const req = await c("requests").findOne({ _id: requestId, stateId: STATE_ID, workflow: { $exists: true }, status: { $in: ["OPEN", "PARTIAL"] }, expectedTransfusionAt: { $gt: now }, $expr: { $lt: ["$allocatedQuantity", "$quantity"] } });
+  if (!req) return;
+  const alerts = await c("alerts").find({ requestId, stateId: req.stateId, requestTenantId: req.tenantId, hospitalId: req.hospitalId, status: "PENDING", deadlineAt: { $gt: now }, pushStatus: { $nin: ["SENT", "EXPIRED", "FAILED"] } }).limit(100).toArray();
   let retry = false;
   let cursor = 0;
   await Promise.all(Array.from({ length: Math.min(4, alerts.length) }, async () => {
    while (cursor < alerts.length) {
     const alert = alerts[cursor++];
     const donor = await c("donors").findOne({ _id: alert.donorId, stateId: STATE_ID, tenantId: alert.tenantId, optedOut: { $ne: true }, pushSubscription: { $exists: true }, $or: [{ audience: false }, { audience: true, expireAt: { $gt: now } }] });
-    const req = await c("requests").findOne({ _id: requestId, stateId: STATE_ID, status: { $in: ["OPEN", "PARTIAL"] }, expectedTransfusionAt: { $gt: now }, $expr: { $lt: ["$allocatedQuantity", "$quantity"] } });
-    if (!donor || !req || !req.workflow?.waves?.some((w: { index: number }) => w.index === alert.wave)) continue;
+    if (!donor || !req.workflow?.waves?.some((w: { index: number }) => w.index === alert.wave)) continue;
     try { if (!donorEligibility(donorModel(donor), now.toISOString()).eligible || !isCompatible(donor.group, req.group, req.component)) continue; } catch { continue; }
     const recent = await c("alerts").find({ donorId: donor.id, stateId: STATE_ID, createdAt: { $gt: new Date(now.getTime() - 30 * 86400_000) } }).limit(5).toArray();
     const hour = new Date(now.getTime() + 330 * 60_000).getUTCHours();

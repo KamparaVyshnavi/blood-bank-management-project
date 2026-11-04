@@ -98,14 +98,24 @@ export class Operations {
     const released = Boolean(row.reservation && !change.unit.reservation);
     if (allocation) {
       const status = released ? "RELEASED" : change.unit.status === "TRANSFUSED" ? "TRANSFUSED" : change.unit.status === "ISSUED" ? "ISSUED" : "ACTIVE";
-      await this.c("allocations").updateOne({ _id: allocation._id }, { $set: { status, updatedAt: this.now, ...(command.type === "HANDOVER" ? { handoverAt: this.now } : {}), ...(released ? { releasedAt: this.now, releaseReason: command.type } : {}) } }, { session });
+      const allocationUpdate = await this.c("allocations").updateOne(
+        { _id: allocation._id, status: allocation.status },
+        { $set: { status, updatedAt: this.now, ...(command.type === "HANDOVER" ? { handoverAt: this.now } : {}), ...(released ? { releasedAt: this.now, releaseReason: command.type } : {}) } },
+        { session },
+      );
+      if (allocationUpdate.matchedCount !== 1) conflict("OWNERSHIP_INCONSISTENT");
       if (released || command.type === "TRANSFUSE") {
         const req = await this.c("requests").findOne({ _id: allocation.requestId, stateId: row.stateId, tenantId: allocation.hospitalTenantId, hospitalId: allocation.hospitalId }, { session });
         if (!req || released && req.allocatedQuantity <= req.transfusedQuantity) conflict("COUNTERS_INCONSISTENT");
         const allocatedQuantity = req.allocatedQuantity - (released ? 1 : 0);
         const transfusedQuantity = req.transfusedQuantity + (command.type === "TRANSFUSE" ? 1 : 0);
         const status = transfusedQuantity === req.quantity ? "COMPLETED" : ["CANCELLED", "ESCALATED"].includes(req.status) ? req.status : allocatedQuantity === req.quantity ? "ALLOCATED" : allocatedQuantity ? "PARTIAL" : "OPEN";
-        await this.c("requests").updateOne({ _id: req._id }, { $set: { allocatedQuantity, transfusedQuantity, status } }, { session });
+        const requestUpdate = await this.c("requests").updateOne(
+          { _id: req._id, allocatedQuantity: req.allocatedQuantity, transfusedQuantity: req.transfusedQuantity },
+          { $set: { allocatedQuantity, transfusedQuantity, status } },
+          { session },
+        );
+        if (requestUpdate.matchedCount !== 1) conflict("COUNTERS_INCONSISTENT");
       }
     }
     await appendChange(this.db, row, next, { ...clean(change.event), _id: change.event.id, ...this.owned(row), bankId: row.bankId, at: this.now, revision: next.revision, ...(allocation ? { hospitalId: allocation.hospitalId, hospitalTenantId: allocation.hospitalTenantId, allocationSnapshot: { ...allocation, status: released ? "RELEASED" : change.unit.status === "TRANSFUSED" ? "TRANSFUSED" : change.unit.status === "ISSUED" ? "ISSUED" : "ACTIVE" }, released } : {}) }, session);
@@ -238,8 +248,10 @@ export class Operations {
             const change = transitionUnit(unitModel(row), { type: "RESERVE", request: requestModel(current), allocationId }, { now: this.now.toISOString(), actorId: this.actor.userId, eventId: randomUUID() });
             const unit = { ...row, ...unitFields(change.unit), revision: (row.revision ?? 0) + 1 };
             const allocation = { _id: previous?._id ?? `slot-${row.id}`, id: allocationId, stateId: row.stateId, tenantId: row.tenantId, bankTenantId: row.tenantId, hospitalTenantId: p.tenantId, bankId: row.bankId, hospitalId: p.id, unitId: row.id, requestId: recordId, status: "ACTIVE", reservedAt: this.now, leaseExpiresAt: new Date(change.unit.reservation!.leaseExpiresAt), updatedAt: this.now };
-            if (previous) await this.c("allocations").replaceOne({ _id: previous._id, status: "RELEASED" }, allocation, { session });
-            else await this.c("allocations").insertOne(allocation, { session });
+            if (previous) {
+              const reused = await this.c("allocations").replaceOne({ _id: previous._id, status: "RELEASED" }, allocation, { session });
+              if (reused.matchedCount !== 1) conflict("ALLOCATION_OWNERSHIP_CONFLICT");
+            } else await this.c("allocations").insertOne(allocation, { session });
             const updated = await this.c("requests").findOneAndUpdate({ _id: current._id, ...this.owned(p), hospitalId: p.id, status: { $in: ["OPEN", "PARTIAL"] }, allocatedQuantity: current.allocatedQuantity, $expr: { $lt: ["$allocatedQuantity", "$quantity"] } }, { $inc: { allocatedQuantity: 1 }, $set: { status: current.allocatedQuantity + 1 === current.quantity ? "ALLOCATED" : "PARTIAL" } }, { session, returnDocument: "after" });
             if (!updated) conflict("REQUEST_CHANGED");
             await appendChange(this.db, row, unit, { ...clean(change.event), _id: change.event.id, ...this.owned(row), bankId: row.bankId, hospitalId: p.id, hospitalTenantId: p.tenantId, at: this.now, revision: unit.revision, allocationSnapshot: allocation }, session);
@@ -255,11 +267,39 @@ export class Operations {
           const current = await this.request(p, recordId, session);
           if (current.workflow) conflict("USE_DURABLE_CANCELLATION");
           if (current.status === "COMPLETED" || current.transfusedQuantity > 0) conflict("CANNOT_CANCEL_USED_STOCK");
-          const units = await this.c("units").find({ stateId: p.stateId, "reservation.requestId": recordId, status: { $in: ["RESERVED", "ISSUED"] } }, { session }).limit(21).toArray();
-          if (units.some(u => u.status === "ISSUED")) conflict("RETURN_ISSUED_STOCK_FIRST");
-          for (const row of units) await this.saveTransition(row, { type: "CANCEL_RESERVATION", requestId: recordId }, session);
-          await this.c("requests").updateOne({ _id: current._id }, { $set: { status: "CANCELLED" } }, { session });
-          return { requestId: recordId, status: "CANCELLED", released: units.length };
+          // Resolve reservations through the hospital-owned allocation slots. A
+          // request ID alone is not an ownership boundary: malformed/colliding
+          // records from another hospital must never enter this cancellation.
+          const slots = await this.c("allocations").find({
+            requestId: recordId, stateId: p.stateId, hospitalTenantId: p.tenantId,
+            hospitalId: p.id, status: { $in: ["ACTIVE", "ISSUED"] },
+          }, { session }).sort({ _id: 1 }).limit(21).toArray();
+          if (slots.length > 20) conflict("ALLOCATION_LIMIT_EXCEEDED");
+          if (slots.some(slot => slot.status === "ISSUED")) conflict("RETURN_ISSUED_STOCK_FIRST");
+          for (const slot of slots) {
+            const row = await this.c("units").findOne({
+              _id: slot.unitId, stateId: p.stateId, tenantId: slot.bankTenantId,
+              bankId: slot.bankId, status: "RESERVED",
+              "reservation.requestId": recordId, "reservation.allocationId": slot.id,
+            }, { session });
+            if (!row) conflict("OWNERSHIP_INCONSISTENT");
+            await this.saveTransition(row, { type: "CANCEL_RESERVATION", requestId: recordId }, session);
+          }
+          // saveTransition adjusts allocation counters and may change the request
+          // status from ALLOCATED to PARTIAL/OPEN. Re-read the in-transaction row
+          // before marking it cancelled rather than matching its stale status.
+          const latest = await this.c("requests").findOne({
+            _id: current._id, ...this.owned(p), hospitalId: p.id,
+            transfusedQuantity: current.transfusedQuantity,
+          }, { session });
+          if (!latest || latest.transfusedQuantity > 0 || latest.status === "COMPLETED") conflict("REQUEST_CHANGED");
+          const cancelled = await this.c("requests").updateOne({
+            _id: latest._id, ...this.owned(p), hospitalId: p.id,
+            status: latest.status, allocatedQuantity: latest.allocatedQuantity,
+            transfusedQuantity: latest.transfusedQuantity,
+          }, { $set: { status: "CANCELLED" } }, { session });
+          if (cancelled.matchedCount !== 1) conflict("REQUEST_CHANGED");
+          return { requestId: recordId, status: "CANCELLED", released: slots.length };
         });
       }
     }

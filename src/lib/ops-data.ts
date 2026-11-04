@@ -44,12 +44,14 @@ function buildUnits(): BloodUnit[] {
     const group = pickGroup();
     const component = COMPONENTS[Math.floor(r() * r() * COMPONENTS.length)]; // skew toward whole blood / red cells
     const bank = banks[Math.floor(r() * 4)];
-    const age = Math.floor(r() * SHELF[component] * 0.95) - (r() < 0.04 ? 2 : 0);
+    // Keep collection dates in the past and make the Expired status agree with
+    // the component-specific shelf-life date shown to users.
+    let age = Math.max(0, Math.floor(r() * SHELF[component] * 0.95) - (r() < 0.04 ? 2 : 0));
+    const roll = r();
+    const status: UnitStatus = roll < 0.74 ? "Available" : roll < 0.86 ? "Reserved" : roll < 0.95 ? "Issued" : roll < 0.98 ? "Discarded" : "Expired";
+    if (status === "Expired") age = SHELF[component] + 1;
     const expiresOn = new Date(NOW + (SHELF[component] - age) * D).toISOString();
     const collectedOn = new Date(NOW - age * D).toISOString();
-    const roll = r();
-    let status: UnitStatus = roll < 0.74 ? "Available" : roll < 0.86 ? "Reserved" : roll < 0.95 ? "Issued" : roll < 0.98 ? "Discarded" : "Expired";
-    if (Date.parse(expiresOn) < NOW && status === "Available") status = "Expired";
     out.push({ id: `U-${String(24000 + i)}`, group, component, collectedOn, expiresOn, status, institutionId: bank.id, institution: bank.name });
   }
   // Make a couple of groups realistically scarce so the alerts have something to say.
@@ -92,7 +94,7 @@ function buildEmergency([id, hid, group, component, qty, urgency, status, ago, d
   if (status === "Fulfilled") timeline.push({ label: "Dispatched and received", at: t(55) }, { label: "Request completed", at: t(70) });
   if (status === "Rejected") timeline.push({ label: "Request rejected", detail: "No compatible stock within range", at: t(25) });
   if (status === "Cancelled") timeline.push({ label: "Request cancelled", detail: "Cancelled by the hospital", at: t(40) });
-  return { id, hospitalId: hid, hospital: h.name, district: h.district, group, component, units: qty, unitsFulfilled: fulfilled, urgency, status, createdAt: created, deadline: at(due - ago + ago), responses, timeline };
+  return { id, hospitalId: hid, hospital: h.name, district: h.district, group, component, units: qty, unitsFulfilled: fulfilled, urgency, status, createdAt: created, deadline: at(due), responses, timeline };
 }
 const emergencies = seeds.map(buildEmergency);
 const OPEN: EmergencyStatus[] = ["Submitted", "Processing", "Awaiting response", "Partially fulfilled"];
@@ -180,11 +182,18 @@ function requestsByDay() {
 export async function getReports() {
   const byStatus = emergencies.reduce<Record<string, number>>((m, e) => ((m[e.status] = (m[e.status] ?? 0) + 1), m), {});
   const expiryByDay = Array.from({ length: 7 }, (_, i) => ({ day: new Date(NOW + i * D).toISOString(), count: units.filter(u => u.status === "Available" && Math.floor((Date.parse(u.expiresOn) - NOW) / D) === i).length }));
-  const closed = emergencies.filter(e => e.status === "Fulfilled" || e.status === "Rejected" || e.status === "Cancelled" || e.status === "Partially fulfilled");
+  // Partially fulfilled requests are still active; only terminal outcomes
+  // belong in the fulfilment-rate denominator.
+  const closed = emergencies.filter(e => e.status === "Fulfilled" || e.status === "Rejected" || e.status === "Cancelled");
   const fulfilled = emergencies.filter(e => e.status === "Fulfilled").length;
   return delay({
     now: NOW, groups: groupRows(units), requestsByDay: requestsByDay(), byStatus, expiryByDay,
-    cards: { collected: 412, issued: 268, requests: emergencies.length, fulfilmentRate: closed.length ? Math.round((fulfilled / closed.length) * 100) : 0 },
+    cards: {
+      collected: units.length,
+      issued: units.filter(u => u.status === "Issued").length,
+      requests: emergencies.length,
+      fulfilmentRate: closed.length ? Math.round((fulfilled / closed.length) * 100) : 0,
+    },
     movement: units.filter(u => u.status === "Issued" || u.status === "Discarded" || u.status === "Expired").slice(0, 12),
     emergencies,
     institutions: institutions.map(i => ({ id: i.id, name: i.name })),

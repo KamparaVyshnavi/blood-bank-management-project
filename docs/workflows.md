@@ -40,7 +40,7 @@ Do not grant runtime schema/index administration, deletes, `_registryMeta` acces
 
 New URGENT/CRITICAL requests must use the durable intake. The older registry request-creation endpoint accepts only ROUTINE work and returns `USE_DURABLE_EMERGENCY_INTAKE` for a new emergency, so an alternate form cannot bypass event-service acknowledgement. Hospital's manual form creates routine work and points emergencies to Code Red. Existing Stage 6 requests/receipts remain readable and retain their manual lifecycle; complete or cancel those synthetic fixtures before rehearsing the new durable journey.
 
-All browser POSTs require JSON, the exact same-origin Origin header and at most 8 KiB; queries and extra input fields are rejected. Tenant/state/institution ownership comes from current Clerk server metadata, never from the body. A state administrator can inspect status but cannot impersonate hospital/bank/donor actions. Responses are private/no-store.
+All browser POSTs require JSON and the exact same-origin Origin header. Registry mutations are capped at 8 KiB; durable emergency intake is capped at 64 KiB and reads the body as a bounded stream. Queries and extra input fields are rejected. Tenant/state/institution ownership comes from current Clerk server metadata, never from the body. A state administrator can inspect status but cannot impersonate hospital/bank/donor actions. Responses are private/no-store.
 
 `POST /api/emergencies` accepts:
 
