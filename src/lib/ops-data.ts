@@ -191,3 +191,17 @@ export async function getReports() {
   });
 }
 export async function getAdmin() { return delay({ now: NOW, users, audit, pendingInstitutions: institutions.filter(i => i.status === "Pending"), cards: { users: users.length, active: institutions.filter(i => i.status === "Active").length, pending: institutions.filter(i => i.status === "Pending").length } }); }
+
+
+export function getDemoDataSeed() {
+  return {
+    institutions: structuredClone(institutions),
+    units: structuredClone(units),
+    emergencies: structuredClone(emergencies),
+    donors: structuredClone(donors),
+    users: structuredClone(users),
+    audit: structuredClone(audit),
+    activity: structuredClone(activity),
+    pending: structuredClone(pending),
+  };
+}
